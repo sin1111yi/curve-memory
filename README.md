@@ -202,14 +202,14 @@ pip install numpy
 # 1. Install from GitHub
 hermes plugins install https://github.com/sin1111yi/curve-memory.git
 
-# 2. Enable and configure
+# 2. Enable and setup (dirs, cron, interactive config)
 hermes plugins enable curve-memory
-hermes config set memory.plugin curve-memory
-
-# 3. Setup: copy cron scripts, create directory structure, register cron jobs
 hermes curve-memory setup
 
-# 4. Initialize the index
+# 3. Enable memory plugin
+hermes config set memory.plugin curve-memory
+
+# 4. Build index
 hermes curve-memory index --rebuild
 
 # 5. Restart the gateway

@@ -202,14 +202,14 @@ pip install numpy
 # 1. 从 GitHub 安装
 hermes plugins install https://github.com/sin1111yi/curve-memory.git
 
-# 2. 启用并配置
+# 2. 启用并初始化（目录、cron、交互式配置）
 hermes plugins enable curve-memory
-hermes config set memory.plugin curve-memory
-
-# 3. 初始化：复制 cron 脚本、创建目录、注册定时任务
 hermes curve-memory setup
 
-# 4. 初始化索引
+# 3. 启用记忆插件
+hermes config set memory.plugin curve-memory
+
+# 4. 建索引
 hermes curve-memory index --rebuild
 
 # 5. 重启 gateway
