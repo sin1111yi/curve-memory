@@ -1,5 +1,7 @@
 # curve-memory — Forgetting Curve Memory System
 
+> **⚠️ Alpha — 测试阶段，API 和配置格式可能变更。**
+
 A [Hermes Agent](https://hermes-agent.nousresearch.com) memory plugin that manages AI memories using a scientifically-grounded forgetting curve.
 
 ## Overview

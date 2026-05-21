@@ -1,5 +1,7 @@
 # curve-memory — 遗忘曲线记忆系统
 
+> **⚠️ Alpha — 测试阶段，API 和配置格式可能变更。**
+
 基于 [Hermes Agent](https://hermes-agent.nousresearch.com) 的记忆插件，使用科学遗忘曲线管理 AI 记忆。
 
 ## 概述
