@@ -207,83 +207,76 @@ hermes plugins enable curve-memory
 hermes config set memory.plugin curve-memory
 
 # 3. 初始化：复制 cron 脚本、创建目录、注册定时任务
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py setup
+hermes curve-memory setup
 
 # 4. 初始化索引
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py index --rebuild
+hermes curve-memory index --rebuild
 
 # 5. 重启 gateway
 hermes gateway restart
 
 # 6. 验证
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py check
+hermes curve-memory check
 ```
 
 ## CLI 参考
 
-所有命令使用插件的 CLI 脚本：
+所有命令通过 Hermes 子命令调用：
 
 ```bash
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py <命令> [参数]
-```
-
-或在插件目录下：
-
-```bash
-cd ~/.hermes/plugins/curve-memory/curve_memory
-python3 cli.py <命令> [参数]
+hermes curve-memory <命令> [参数]
 ```
 
 ### 检索
 
 ```bash
-python3 cli.py search "借用检查器"           # 三路检索
-python3 cli.py search "R(t) 公式" --json     # JSON 输出
+hermes curve-memory search "借用检查器"           # 三路检索
+hermes curve-memory search "R(t) 公式" --json     # JSON 输出
 ```
 
 ### 系统状态
 
 ```bash
-python3 cli.py status         # TIER 分布 + 索引健康
-python3 cli.py stats          # 详细统计
-python3 cli.py config         # 查看配置
-python3 cli.py check          # 健康检查（6 项）
-python3 cli.py plot           # R(t) 曲线 ASCII 图
+hermes curve-memory status         # TIER 分布 + 索引健康
+hermes curve-memory stats          # 详细统计
+hermes curve-memory config         # 查看配置
+hermes curve-memory check          # 健康检查（6 项）
+hermes curve-memory plot           # R(t) 曲线 ASCII 图
 ```
 
 ### 记忆管理
 
 ```bash
-python3 cli.py touch <主题>         # 重置 t=0
-python3 cli.py forget <主题>        # 手动归档
-python3 cli.py mature <主题>        # 标记成熟
-python3 cli.py recover <主题>       # 恢复归档
-python3 cli.py recover --list       # 列出可恢复
-python3 cli.py undo                 # 最近操作
+hermes curve-memory touch <主题>         # 重置 t=0
+hermes curve-memory forget <主题>        # 手动归档
+hermes curve-memory mature <主题>        # 标记成熟
+hermes curve-memory recover <主题>       # 恢复归档
+hermes curve-memory recover --list       # 列出可恢复
+hermes curve-memory undo                 # 最近操作
 ```
 
 ### 索引
 
 ```bash
-python3 cli.py index --rebuild      # 全量重建
-python3 cli.py index --incremental  # 增量更新
-python3 cli.py repair               # 诊断问题
-python3 cli.py repair --fix         # 自动修复
+hermes curve-memory index --rebuild      # 全量重建
+hermes curve-memory index --incremental  # 增量更新
+hermes curve-memory repair               # 诊断问题
+hermes curve-memory repair --fix         # 自动修复
 ```
 
 ### 生命周期
 
 ```bash
-python3 cli.py setup             # 安装后初始化
-python3 cli.py install-wizard    # 交互式向导
-python3 cli.py activate          # 重新启用
-python3 cli.py deactivate        # 停用（保留数据）
-python3 cli.py uninstall [-y]    # 卸载
-python3 cli.py uninstall --all   # 卸载 + 清除数据
-python3 cli.py export backup.tar.gz  # 导出
+hermes curve-memory setup             # 安装后初始化
+hermes curve-memory install-wizard    # 交互式向导
+hermes curve-memory activate          # 重新启用
+hermes curve-memory deactivate        # 停用（保留数据）
+hermes curve-memory uninstall [-y]    # 卸载
+hermes curve-memory uninstall --all   # 卸载 + 清除数据
+hermes curve-memory export backup.tar.gz  # 导出
 
 # 每日
-python3 cli.py daily-tick        # 手动衰减
+hermes curve-memory daily-tick        # 手动衰减
 ```
 
 ## 相关项目

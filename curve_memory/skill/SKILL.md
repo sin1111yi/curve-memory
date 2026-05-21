@@ -47,11 +47,10 @@ ralqlator 验证: `ralqlator "0.462 + 0.538 * pow(C_E, -t / 2.71)"`
 ## CLI 命令
 
 ```bash
-cd ~/.hermes/scripts
-python3 curve-memory-cli.py search "query"          # 三路检索
-python3 curve-memory-cli.py status                   # 状态概览
-python3 curve-memory-cli.py touch <topic>            # 置 t=0
-python3 curve-memory-cli.py daily-tick               # 手动衰减
+hermes curve-memory search "<query>"          # 三路检索
+hermes curve-memory status                   # 状态概览
+hermes curve-memory touch <topic>            # 置 t=0
+hermes curve-memory daily-tick               # 手动衰减
 ```
 
 ## 文件结构

@@ -207,83 +207,76 @@ hermes plugins enable curve-memory
 hermes config set memory.plugin curve-memory
 
 # 3. Setup: copy cron scripts, create directory structure, register cron jobs
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py setup
+hermes curve-memory setup
 
 # 4. Initialize the index
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py index --rebuild
+hermes curve-memory index --rebuild
 
 # 5. Restart the gateway
 hermes gateway restart
 
 # 6. Verify
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py check
+hermes curve-memory check
 ```
 
 ## CLI Reference
 
-All commands use the plugin's CLI script:
+All commands are available as Hermes subcommands:
 
 ```bash
-python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py <command> [args]
-```
-
-Or from the plugin directory:
-
-```bash
-cd ~/.hermes/plugins/curve-memory/curve_memory
-python3 cli.py <command> [args]
+hermes curve-memory <command> [args]
 ```
 
 ### Search
 
 ```bash
-python3 cli.py search "borrow checker"         # Three-way search
-python3 cli.py search "R(t) formula" --json     # JSON output
+hermes curve-memory search "borrow checker"         # Three-way search
+hermes curve-memory search "R(t) formula" --json     # JSON output
 ```
 
 ### System Status
 
 ```bash
-python3 cli.py status          # TIER distribution + index health
-python3 cli.py stats           # Detailed statistics
-python3 cli.py config          # View configuration
-python3 cli.py check           # Health check (6 items)
-python3 cli.py plot            # ASCII R(t) curve
+hermes curve-memory status          # TIER distribution + index health
+hermes curve-memory stats           # Detailed statistics
+hermes curve-memory config          # View configuration
+hermes curve-memory check           # Health check (6 items)
+hermes curve-memory plot            # ASCII R(t) curve
 ```
 
 ### Memory Management
 
 ```bash
-python3 cli.py touch <topic>         # Reset t=0
-python3 cli.py forget <topic>        # Manual archive
-python3 cli.py mature <topic>        # Mark as mature
-python3 cli.py recover <topic>       # Restore from archive
-python3 cli.py recover --list        # List recoverable topics
-python3 cli.py undo                  # Show recent ops
+hermes curve-memory touch <topic>         # Reset t=0
+hermes curve-memory forget <topic>        # Manual archive
+hermes curve-memory mature <topic>        # Mark as mature
+hermes curve-memory recover <topic>       # Restore from archive
+hermes curve-memory recover --list        # List recoverable topics
+hermes curve-memory undo                  # Show recent ops
 ```
 
 ### Index
 
 ```bash
-python3 cli.py index --rebuild       # Full reindex
-python3 cli.py index --incremental   # Incremental update
-python3 cli.py repair                # Diagnose issues
-python3 cli.py repair --fix          # Auto-fix
+hermes curve-memory index --rebuild       # Full reindex
+hermes curve-memory index --incremental   # Incremental update
+hermes curve-memory repair                # Diagnose issues
+hermes curve-memory repair --fix          # Auto-fix
 ```
 
 ### Lifecycle
 
 ```bash
-python3 cli.py setup              # Initialize after install
-python3 cli.py install-wizard     # Interactive wizard
-python3 cli.py activate           # Re-enable
-python3 cli.py deactivate         # Disable (preserve data)
-python3 cli.py uninstall [-y]     # Clean up
-python3 cli.py uninstall --all    # Clean up + erase all data
-python3 cli.py export backup.tar.gz  # Export memories
+hermes curve-memory setup              # Initialize after install
+hermes curve-memory install-wizard     # Interactive wizard
+hermes curve-memory activate           # Re-enable
+hermes curve-memory deactivate         # Disable (preserve data)
+hermes curve-memory uninstall [-y]     # Clean up
+hermes curve-memory uninstall --all    # Clean up + erase all data
+hermes curve-memory export backup.tar.gz  # Export memories
 
 # Daily
-python3 cli.py daily-tick         # Manual decay trigger
+hermes curve-memory daily-tick         # Manual decay trigger
 ```
 
 ## Related Projects
