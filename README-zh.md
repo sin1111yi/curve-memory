@@ -202,6 +202,47 @@ hermes curve-memory config --interactive
 - `CURVE_MEMORY_GAMMA`
 - `CURVE_MEMORY_ARCHIVE_DAYS`
 
+## 接管范围
+
+curve-memory 完全接管两个系统：
+
+| 组件 | 内置（默认） | curve-memory |
+|------|-------------|--------------|
+| **记忆系统** | `MEMORY.md` — 平面键值存储 + `idx:` 索引 | `active/*.md` — 每个主题一个文件，遗忘曲线 R(t)，混合检索 |
+| **用户画像** | `USER.md` — 由 Hermes `memory` 工具管理 | `USER.md`（`memories/` 目录下）— 自然语言，通过 `system_prompt_block()` 注入 |
+
+插件提供 4 个工具：`curve_memory_search`（记忆召回）、`curve_memory_user_get/set/delete`（画像管理）。
+
+## 从内置记忆迁移
+
+如果已有 Hermes 内置记忆数据，按以下步骤迁移：
+
+### 1. 记忆数据（MEMORY.md）
+
+`idx:` 索引格式已经兼容——无需迁移。已有的 `active/*.md` 文件立即可被识别。
+
+> **注意：** `MEMORY.md` 本身**不会**被迁移到 `active/*.md`——它只是索引。实际记忆内容已通过记忆索引协议由 agent 写入 `active/*.md`。如果你的 `MEMORY.md` 中有非索引的键值条目，agent 在禁用内置系统之前仍然可以读取它们。
+
+### 2. 用户画像（USER.md）
+
+```bash
+# 从内置记忆导出用户画像
+hermes memory get > ~/user-profile-backup.txt
+
+# 后续可通过 curve_memory_user_set 导入，
+# 或直接编辑 ~/.hermes/memories/USER.md
+```
+
+### 3. 禁用内置记忆（可选，迁移完成并验证后）
+
+```bash
+hermes config set memory.memory_enabled false
+hermes config set memory.user_profile_enabled false
+hermes gateway restart
+```
+
+这将会移除内置的 `memory` 工具和 `USER.md`。curve-memory 的工具和提示注入成为唯一来源。
+
 ## 性能
 
 | 操作 | 延迟 | 说明 |

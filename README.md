@@ -202,6 +202,50 @@ Or via environment variables:
 - `CURVE_MEMORY_GAMMA`
 - `CURVE_MEMORY_ARCHIVE_DAYS`
 
+## Managed Components
+
+curve-memory fully takes over two systems:
+
+| Component | Built-in (default) | curve-memory |
+|-----------|-------------------|--------------|
+| **Memories** | `MEMORY.md` — flat key-value store with `idx:` index | `active/*.md` — one file per topic, forgetting curve (R(t)), hybrid search |
+| **User Profile** | `USER.md` — managed by Hermes `memory` tool | `USER.md` (in `memories/`) — natural language, injected via `system_prompt_block()` |
+
+The plugin provides 4 tools: `curve_memory_search` (memory recall), `curve_memory_user_get/set/delete` (profile management).
+
+## Migration from Built-in Memory
+
+If you already have Hermes built-in memory data, migrate as follows:
+
+### 1. Memories (MEMORY.md)
+
+The `idx:` index format is already compatible — no migration needed. Your existing `active/*.md` files are recognized immediately.
+
+### 2. User Profile (USER.md)
+
+```bash
+# Export existing user profile from built-in memory
+hermes memory get > ~/user-profile-backup.txt
+
+# The agent can then import entries via curve_memory_user_set,
+# or you can edit ~/.hermes/memories/USER.md directly.
+```
+
+> **Note:** `MEMORY.md` itself is NOT migrated to `active/*.md` — it's only the index (`idx:`). The actual memory content was already written to `active/*.md` by the agent through the memory index protocol. If you have key-value entries in `MEMORY.md` that aren't indexed, the agent will still read them from the built-in system until you disable it.
+
+### 3. Disable Built-in Memory (optional, after migration)
+
+Once curve-memory is configured and verified:
+
+```bash
+hermes config set memory.memory_enabled false
+hermes config set memory.user_profile_enabled false
+hermes gateway restart
+```
+
+This removes the built-in `memory` tool and `USER.md` from the agent's system prompt.
+curve-memory's tools and prompt blocks become the exclusive source.
+
 ## Performance
 
 | Operation | Latency | Notes |
