@@ -229,16 +229,41 @@ curve-memory search "R(t) formula"
 ## CLI Reference
 
 ```bash
-curve-memory search <query>          # Three-way hybrid search
-curve-memory search <query> --json   # JSON output (machine-readable)
-curve-memory status                  # TIER distribution + index health
-curve-memory touch <topic>           # Reset t=0, increment access_count
-curve-memory daily-tick              # Manual trigger daily decay
-curve-memory index --rebuild         # Full reindex all memories
-curve-memory index --incremental     # Incremental update (by mtime)
-curve-memory forget <topic>          # Manual archive
-curve-memory mature <topic>          # Mark topic as mature
-curve-memory check                   # Full health check
+# 三路混合检索
+curve-memory search <query>              Three-way hybrid search
+curve-memory search <query> --json       JSON output (machine-readable)
+
+# 系统状态
+curve-memory status                      TIER distribution + index health
+curve-memory stats                       Detailed statistics (avg R(t), TIER dist, index size)
+curve-memory config                      View current configuration
+curve-memory check                       Full health check (6 items)
+curve-memory plot                        ASCII visualization of R(t) curve
+
+# 记忆管理
+curve-memory touch <topic>               Reset t=0, increment access_count
+curve-memory forget <topic>              Manual archive
+curve-memory mature <topic>              Mark topic as mature
+curve-memory recover <topic>             Restore from archive/
+curve-memory recover --list              List archivable topics
+curve-memory undo                        Show recent operations
+
+# 索引
+curve-memory index --rebuild             Full reindex all memories
+curve-memory index --incremental         Incremental update (by mtime)
+curve-memory repair                      Diagnose and fix common issues
+curve-memory repair --fix                Auto-fix issues
+
+# 生命周期
+curve-memory setup                       Initialize: copy cron scripts, register jobs, check model
+curve-memory install-wizard              Interactive installation guide (7 checks)
+curve-memory activate                    Re-enable memory plugin
+curve-memory deactivate                  Disable (preserve data)
+curve-memory uninstall [--all] [-y]      Clean up: cron, config, optional data
+curve-memory export [file.tar.gz]        Export all memory data
+
+# Daily
+curve-memory daily-tick                  Manual trigger daily decay
 ```
 
 ## Related Projects

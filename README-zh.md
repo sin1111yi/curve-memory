@@ -229,16 +229,41 @@ curve-memory search "R(t) 公式"
 ## CLI 参考
 
 ```bash
-curve-memory search <查询>            # 三路混合检索
-curve-memory search <查询> --json     # JSON 输出（机器可读）
-curve-memory status                   # TIER 分布 + 索引健康
-curve-memory touch <主题>             # 重置 t=0, 增加访问计数
-curve-memory daily-tick               # 手动触发每日衰减
-curve-memory index --rebuild          # 全量重建索引
-curve-memory index --incremental      # 增量更新（按 mtime）
-curve-memory forget <主题>            # 手动归档
-curve-memory mature <主题>            # 标记为成熟
-curve-memory check                    # 全面健康检查
+# 三路混合检索
+curve-memory search <查询>                 三路混合检索
+curve-memory search <查询> --json           JSON 输出（机器可读）
+
+# 系统状态
+curve-memory status                        TIER 分布 + 索引健康
+curve-memory stats                         详细统计（平均 R(t)、TIER、索引大小）
+curve-memory config                        查看当前配置
+curve-memory check                         全面健康检查（6 项）
+curve-memory plot                          显示 R(t) 曲线 ASCII 图
+
+# 记忆管理
+curve-memory touch <主题>                   重置 t=0，增加访问计数
+curve-memory forget <主题>                  手动归档
+curve-memory mature <主题>                  标记为成熟
+curve-memory recover <主题>                 从 archive 恢复
+curve-memory recover --list                 列出可恢复的主题
+curve-memory undo                           显示最近操作
+
+# 索引
+curve-memory index --rebuild                全量重建索引
+curve-memory index --incremental            增量更新（按 mtime）
+curve-memory repair                         诊断并修复常见问题
+curve-memory repair --fix                   自动修复
+
+# 生命周期
+curve-memory setup                          初始化：复制 cron 脚本、注册任务、检查模型
+curve-memory install-wizard                 交互式安装向导（7 项检查）
+curve-memory activate                       重新启用
+curve-memory deactivate                     停用（保留数据）
+curve-memory uninstall [--all] [-y]         卸载：清理 cron、配置、可选数据
+curve-memory export [文件.tar.gz]           导出所有记忆数据
+
+# 每日
+curve-memory daily-tick                     手动触发每日衰减
 ```
 
 ## 相关项目
