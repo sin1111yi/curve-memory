@@ -98,8 +98,8 @@ class HybridSearch:
         r_values = {}
         for t, info in activity.items():
             raw_t = info.get("t", 0)
-            # If t is a Unix timestamp (>= 1e12), compute delta in days
-            if isinstance(raw_t, (int, float)) and raw_t > 1000000000000:
+            # If t is a Unix timestamp (>= 1e9, seconds), compute delta in days
+            if isinstance(raw_t, (int, float)) and raw_t > 1000000000:
                 t_days = (now - raw_t) / 86400
             else:
                 t_days = raw_t

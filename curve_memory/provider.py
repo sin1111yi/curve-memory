@@ -258,7 +258,7 @@ class CurveMemoryProvider(MemoryProvider):
             now = int(time.time())
             for topic, info in memories.items():
                 raw_t = info.get("t", 0)
-                if isinstance(raw_t, (int, float)) and 0 < raw_t < 1000000000000:
+                if isinstance(raw_t, (int, float)) and 0 < raw_t < 1000000000:
                     info["t"] = now - raw_t * 86400
                     changed = True
             if changed:
@@ -311,7 +311,7 @@ class CurveMemoryProvider(MemoryProvider):
             to_remove = []
             for topic, info in list(memories.items()):
                 raw_t = info.get("t", 0)
-                if isinstance(raw_t, (int, float)) and raw_t > 1000000000000:
+                if isinstance(raw_t, (int, float)) and raw_t > 1000000000:
                     t_days = (now - raw_t) / 86400
                 else:
                     t_days = raw_t

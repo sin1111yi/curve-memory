@@ -109,7 +109,7 @@ def cmd_status(args):
         now = time.time()
         for topic, info in memories.items():
             raw_t = info.get("t", 0)
-            if isinstance(raw_t, (int, float)) and raw_t > 1000000000000:
+            if isinstance(raw_t, (int, float)) and raw_t > 1000000000:
                 t_days = (now - raw_t) / 86400
             else:
                 t_days = raw_t
@@ -297,7 +297,7 @@ def cmd_index(args):
         # 获取 TIER 级别
         info = memories.get(topic, {})
         raw_t = info.get("t", 0)
-        if isinstance(raw_t, (int, float)) and raw_t > 1000000000000:
+        if isinstance(raw_t, (int, float)) and raw_t > 1000000000:
             t_days = (now - raw_t) / 86400
         else:
             t_days = raw_t
