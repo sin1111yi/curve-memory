@@ -1,21 +1,22 @@
 """
-Provider — curve-memory MemoryProvider 实现
+CurveMemoryProvider — 完整的 Hermes MemoryProvider 实现
+
+生命周期：
+  initialize() → 创建资源，加载配置和嵌入引擎
+  prefetch()   → 每轮对话前召回记忆
+  sync_turn()  → 每轮对话后更新活性
+  get_tool_schemas() / handle_tool_call() → 暴露搜索工具
+  get_config_schema() / save_config() → hermes memory setup 支持
+  shutdown()   → 清理
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import os
-import sys
+import re
 from pathlib import Path
-from typing import Any
-
-_PLUGIN_DIR = Path(__file__).parent.parent  # plugins/curve-memory/
-if str(_PLUGIN_DIR) not in sys.path:
-    sys.path.insert(0, str(_PLUGIN_DIR))
-_CORE_DIR = Path(__file__).parent / "core"  # plugins/curve-memory/curve_memory/core/
-if str(_CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(_CORE_DIR))
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,19 +25,20 @@ TOOL_SCHEMAS = [
     {
         "name": "curve_memory_search",
         "description": (
-            "三路混合检索记忆系统（BM25 + Embedding qwen3-embedding:8b + R(t) 遗忘曲线）。"
-            "返回 top-5 相关记忆及 TIER 级别。"
+            "Hybrid search across persistent memories stored in the curve-memory system. "
+            "Uses BM25 + embedding similarity + recency scoring (forgetting curve). "
+            "Returns top-k relevant memories with their TIER levels."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "检索关键词或自然语言描述",
+                    "description": "Search query or natural language description",
                 },
                 "top_k": {
                     "type": "integer",
-                    "description": "返回结果数（默认 5）",
+                    "description": "Number of results to return (default: 5, max: 20)",
                     "default": 5,
                 },
             },
@@ -46,10 +48,11 @@ TOOL_SCHEMAS = [
 ]
 
 
-def _touch_memory(topic: str):
+def _touch_memory(topic: str, memories_dir: Path):
+    """更新记忆的访问时间"""
     try:
         from curve_memory.core.activity import parse_activity, format_activity
-        activity_path = Path.home() / ".hermes" / "memories" / "ACTIVITY.yaml"
+        activity_path = memories_dir / "ACTIVITY.yaml"
         if not activity_path.exists():
             return
         raw = activity_path.read_text(encoding="utf-8")
@@ -63,17 +66,15 @@ def _touch_memory(topic: str):
         logger.debug("touch error: %s", e)
 
 
-def _extract_mentioned_topics(text: str) -> list:
-    """使用单词边界匹配提取提到的记忆主题，避免误匹配"""
-    import re
+def _extract_mentioned_topics(text: str, memories_dir: Path) -> list:
+    """从文本中提取提到的记忆主题"""
     topics = set()
-    mem_dir = Path.home() / ".hermes" / "memories" / "active"
-    if not mem_dir.exists():
+    active_dir = memories_dir / "active"
+    if not active_dir.exists():
         return []
-    for f in mem_dir.glob("*.md"):
+    for f in active_dir.glob("*.md"):
         topic = f.stem
-        pattern = re.compile(r'\b' + re.escape(topic.lower()) + r'\b')
-        if pattern.search(text.lower()):
+        if re.search(r'\b' + re.escape(topic.lower()) + r'\b', text.lower()):
             topics.add(topic)
     return list(topics)
 
@@ -87,75 +88,151 @@ try:
         name = "curve-memory"
 
         def __init__(self):
+            self._cfg: dict = {}
+            self._base: Optional[Path] = None
+            self._memories_dir: Optional[Path] = None
             self._embedder = None
             self._searcher = None
-            self._touched_topics = set()
+            self._touched_topics: set = set()
+
+        # ── Core lifecycle ──────────────────────────────────────────────
 
         def is_available(self) -> bool:
-            return (Path.home() / ".hermes" / "memories" / "ACTIVITY.yaml").exists()
+            """本地插件始终可用（只要有配置路径）"""
+            return True
 
         def initialize(self, session_id: str, **kwargs):
-            try:
-                from curve_memory.core.config import load_config
-                self._cfg = load_config()
-            except Exception:
-                self._cfg = {"embedding": {}, "search": {}, "tier": {}}
+            """初始化嵌入引擎、搜索器"""
+            hermes_home = kwargs.get("hermes_home", str(Path.home() / ".hermes"))
+            self._base = Path(hermes_home)
+            self._memories_dir = self._base / "memories"
 
+            # 加载配置
+            from curve_memory.core.config import load_config
+            self._cfg = load_config(hermes_home)
+
+            # 初始化嵌入器
             try:
                 from curve_memory.core.embedding_provider import create_embedding_provider
                 self._embedder = create_embedding_provider(self._cfg.get("embedding", {}))
-            except Exception:
+            except Exception as e:
+                logger.debug("Embedder init failed: %s", e)
                 self._embedder = None
+
+            # 初始化搜索器
             try:
                 from curve_memory.core.search import HybridSearch
                 self._searcher = HybridSearch(
-                    Path.home() / ".hermes" / "memories",
+                    self._memories_dir,
                     embedder=self._embedder,
                     alpha=self._cfg.get("search", {}).get("alpha", 0.35),
                     beta=self._cfg.get("search", {}).get("beta", 0.45),
                     gamma=self._cfg.get("search", {}).get("gamma", 0.20),
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug("Searcher init failed: %s", e)
                 self._searcher = None
+
             self._touched_topics = set()
-            logger.debug("CurveMemory init (deg=%s)",
+            logger.debug("CurveMemory init (deg=%s)", 
                          getattr(self._searcher, 'degrade_level', 'N/A'))
 
+        # ── Config ──────────────────────────────────────────────────────
+
+        def get_config_schema(self) -> List[Dict[str, Any]]:
+            from curve_memory.core.config import get_config_schema
+            return get_config_schema()
+
+        def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
+            from curve_memory.core.config import schema_values_to_config, save_config as _save
+            cfg = schema_values_to_config(values)
+            _save(cfg, hermes_home)
+
+        # ── System prompt ───────────────────────────────────────────────
+
+        def system_prompt_block(self) -> str:
+            return (
+                "You have access to a memory system via curve_memory_search tool. "
+                "Retrieved memories show a TIER level: TIER_5 (recent, ≤1d), "
+                "TIER_4 (≤3d), TIER_3 (≤7d), TIER_2 (≤14d), ARCHIVE (≥30d)."
+            )
+
+        # ── Prefetch (context injection) ────────────────────────────────
+
         def prefetch(self, query: str, *, session_id: str = "") -> str:
+            """每轮对话前召回相关记忆"""
             if not self._searcher or not query.strip():
-                return "<!-- curve-memory: searcher not initialized -->"
+                return ""
+
             try:
                 results = self._searcher.search(query, top_k=3)
                 if not results:
-                    return f"<!-- curve-memory: degrade={self._searcher.degrade_level}, no results -->"
+                    return ""
+
                 blocks = []
                 for topic, score, snippet, r in results:
                     from curve_memory.core.tier import r_to_tier_name
                     tier = r_to_tier_name(r)
                     blocks.append(f"### {topic} ({tier})\n{snippet}")
                     self._touched_topics.add(topic)
-                diag = f"<!-- curve-memory: degrade={self._searcher.degrade_level}, results={len(results)} -->"
-                return diag + "\n\n## 召回记忆\n\n" + "\n\n".join(blocks)
+
+                return "\n\n## Retrieved Memories\n\n" + "\n\n".join(blocks)
             except Exception as e:
                 logger.debug("prefetch error: %s", e)
-                return f"<!-- curve-memory: error={e} -->"
+                return ""
 
-        def sync_turn(self, user: str, asst: str):
-            mentioned = _extract_mentioned_topics(user)
-            mentioned += _extract_mentioned_topics(asst)
+        # ── Sync turn ───────────────────────────────────────────────────
+
+        def sync_turn(self, user: str, asst: str, *, session_id: str = ""):
+            """每轮对话后更新被引用的记忆活性"""
+            if not self._memories_dir:
+                return
+            mentioned = _extract_mentioned_topics(user, self._memories_dir)
+            mentioned += _extract_mentioned_topics(asst, self._memories_dir)
             for topic in set(mentioned) | self._touched_topics:
-                _touch_memory(topic)
+                _touch_memory(topic, self._memories_dir)
             self._touched_topics.clear()
 
-        def get_tool_schemas(self) -> list:
+        # ── Tools ───────────────────────────────────────────────────────
+
+        def get_tool_schemas(self) -> List[Dict[str, Any]]:
             return TOOL_SCHEMAS
 
-        def system_prompt_block(self) -> str:
-            return (
-                "## Memory System\n"
-                "R(t) = 0.462 + 0.538*exp(-t/2.71)\n"
-                "TIER_5(≤1d) → TIER_4(≤3d) → TIER_3(≤7d) → TIER_2(≤14d) → ARCHIVE(≥30d)"
-            )
+        def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
+            if tool_name == "curve_memory_search":
+                query = args.get("query", "").strip()
+                top_k = min(int(args.get("top_k", 5)), 20)
+                if not query:
+                    return json.dumps({"error": "No query provided"})
+                if not self._searcher:
+                    return json.dumps({"error": "Search not initialized"})
+                try:
+                    results = self._searcher.search(query, top_k=top_k)
+                    serializable = [
+                        {
+                            "topic": topic,
+                            "score": round(score, 4),
+                            "snippet": snippet[:500],
+                            "tier": tier,
+                        }
+                        for topic, score, snippet, r in results
+                        for tier in [__import__(
+                            "curve_memory.core.tier", fromlist=["r_to_tier_name"]
+                        ).r_to_tier_name(r)]
+                    ]
+                    return json.dumps({"results": serializable})
+                except Exception as e:
+                    return json.dumps({"error": str(e)})
+
+            raise NotImplementedError(f"Unknown tool: {tool_name}")
+
+        # ── Shutdown ────────────────────────────────────────────────────
+
+        def shutdown(self):
+            self._searcher = None
+            self._embedder = None
+            self._cfg = {}
+            logger.debug("CurveMemory shut down")
 
 except ImportError:
-    CurveMemoryProvider = None  # Hermes 环境不可用
+    CurveMemoryProvider = None  # Hermes 环境不可用时降级

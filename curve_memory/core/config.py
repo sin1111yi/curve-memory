@@ -2,18 +2,15 @@
 """
 config.py — curve-memory 配置管理
 
-从 ~/.hermes/config.yaml 读取 memory.curve-memory 配置段。
-不依赖 PyYAML（使用 activity.py 的简易解析器）。
+支持 hermes_home 参数（不硬编码 ~/.hermes），
+环境变量覆盖，提供 get_config_schema / save_config 兼容接口。
 """
 
+import os
+import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-# 兼容路径
-try:
-    from activity import parse_activity
-except ModuleNotFoundError:
-    from curve_memory.core.activity import parse_activity
 
 DEFAULT_CONFIG = {
     "embedding": {
@@ -38,38 +35,103 @@ DEFAULT_CONFIG = {
     },
 }
 
+# 配置段在 config.yaml 中的键名（用于解析和写入）
+CONFIG_SECTION_KEY = "curve-memory"
+CONFIG_FILE_NAME = "curve-memory-config.json"
 
-def load_config() -> dict:
-    """加载插件配置，缺失项使用默认值。支持环境变量覆盖。"""
-    config_path = Path.home() / ".hermes" / "config.yaml"
-    if not config_path.exists():
-        cfg = _deep_copy(DEFAULT_CONFIG)
-    else:
+
+def get_config_path(hermes_home: str = "") -> Path:
+    """返回配置文件的路径"""
+    base = Path(hermes_home).expanduser().resolve() if hermes_home else Path.home() / ".hermes"
+    return base / CONFIG_FILE_NAME
+
+
+def load_config(hermes_home: str = "") -> dict:
+    """加载配置，缺失项使用默认值。支持环境变量覆盖。"""
+    cfg = _deep_copy(DEFAULT_CONFIG)
+
+    # 尝试从 JSON 配置文件加载
+    config_path = get_config_path(hermes_home)
+    if config_path.exists():
         try:
-            raw = config_path.read_text(encoding="utf-8")
-            hermes_cfg = parse_activity(raw)
-        except Exception:
-            cfg = _deep_copy(DEFAULT_CONFIG)
-            cfg = _apply_env_overrides(cfg)
-            return cfg
-
-        plugin_cfg = _extract_plugin_config(raw)
-        if not plugin_cfg:
-            cfg = _deep_copy(DEFAULT_CONFIG)
-        else:
-            merged = _deep_copy(DEFAULT_CONFIG)
+            user_cfg = json.loads(config_path.read_text(encoding="utf-8"))
             for section in ("embedding", "search", "tier"):
-                if section in plugin_cfg and isinstance(plugin_cfg[section], dict):
-                    merged[section].update(plugin_cfg[section])
-            cfg = merged
+                if section in user_cfg and isinstance(user_cfg[section], dict):
+                    cfg[section].update(user_cfg[section])
+        except Exception:
+            pass
 
     cfg = _apply_env_overrides(cfg)
     return cfg
 
 
+def save_config(values: dict, hermes_home: str = "") -> None:
+    """保存配置到 JSON 文件"""
+    config_path = get_config_path(hermes_home)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_config_schema() -> list:
+    """返回配置 schema（供 MemoryProvider ABC 使用 / 直接 CLI 调用）"""
+    return [
+        {
+            "key": "model",
+            "description": "Ollama embedding model (e.g. qwen3-embedding:8b, nomic-embed-text)",
+            "default": "qwen3-embedding:8b",
+        },
+        {
+            "key": "base_url",
+            "description": "Ollama server URL",
+            "default": "http://localhost:11434",
+        },
+        {
+            "key": "search_alpha",
+            "description": "BM25 weight in hybrid search (0-1)",
+            "default": 0.35,
+        },
+        {
+            "key": "search_beta",
+            "description": "Embedding weight in hybrid search (0-1)",
+            "default": 0.45,
+        },
+        {
+            "key": "search_gamma",
+            "description": "Recency weight in hybrid search (0-1)",
+            "default": 0.20,
+        },
+        {
+            "key": "archive_days",
+            "description": "Days before a memory is archived (0 = never)",
+            "default": 30,
+        },
+    ]
+
+
+def schema_values_to_config(values: dict) -> dict:
+    """将 get_config_schema() 的 values 转为内部配置格式"""
+    return {
+        "embedding": {
+            "provider": "ollama",
+            "model": values.get("model", "qwen3-embedding:8b"),
+            "base_url": values.get("base_url", "http://localhost:11434"),
+        },
+        "search": {
+            "alpha": float(values.get("search_alpha", 0.35)),
+            "beta": float(values.get("search_beta", 0.45)),
+            "gamma": float(values.get("search_gamma", 0.20)),
+            "top_k": 5,
+        },
+        "tier": {
+            "archive_threshold_days": int(values.get("archive_days", 30)),
+            "mature_access_count": 20,
+            "mature_t_days": 3,
+        },
+    }
+
+
 def _apply_env_overrides(cfg: dict) -> dict:
     """环境变量覆盖配置"""
-    import os
     env_map = {
         "CURVE_MEMORY_EMBEDDING_MODEL": ("embedding", "model"),
         "CURVE_MEMORY_EMBEDDING_URL": ("embedding", "base_url"),
@@ -91,75 +153,6 @@ def _apply_env_overrides(cfg: dict) -> dict:
     return cfg
 
 
-def _extract_plugin_config(raw: str) -> dict:
-    """从 YAML 文本中提取 memory.curve-memory 配置块"""
-    import re
-    # 查找 memory: 块下的 curve-memory: 块
-    in_memory = False
-    in_curve = False
-    result = {}
-    current_section = None
-    indent_level = 0
-
-    for line in raw.splitlines():
-        stripped = line.rstrip()
-        if not stripped.strip() or stripped.strip().startswith("#"):
-            continue
-
-        # 检测 memory: 顶层键
-        m = re.match(r'^memory:\s*', stripped)
-        if m:
-            in_memory = True
-            indent_level = len(line) - len(line.lstrip())
-            in_curve = False
-            continue
-
-        if not in_memory:
-            continue
-
-        # 检测 memory 下的 curve-memory:
-        space = len(line) - len(line.lstrip())
-        if space > indent_level:
-            m = re.match(r'^(\s+)([\w-]+):\s*', stripped)
-            if m:
-                key = m.group(2)
-                if key == "curve-memory":
-                    in_curve = True
-                    continue
-
-        if in_curve:
-            m = re.match(r'^(\s+)(\w+):\s*', stripped)
-            if m:
-                key = m.group(2)
-                if key in ("embedding", "search", "tier"):
-                    current_section = key
-                    result[current_section] = {}
-                elif current_section:
-                    val_match = re.match(r'^(\s+)(\w+):\s*(.*)', stripped)
-                    if val_match:
-                        sub_key = val_match.group(2)
-                        sub_val = val_match.group(3).strip()
-                        result[current_section][sub_key] = _parse_val(sub_val)
-
-    return result
-
-
-def _parse_val(val: str):
-    if val == "true":
-        return True
-    if val == "false":
-        return False
-    try:
-        return int(val)
-    except ValueError:
-        pass
-    try:
-        return float(val)
-    except ValueError:
-        pass
-    return val.strip("'\"")
-
-
 def _deep_copy(d: dict) -> dict:
     return {k: _deep_copy(v) if isinstance(v, dict) else v for k, v in d.items()}
 
@@ -172,8 +165,3 @@ def format_config(cfg: dict) -> str:
         for k, v in values.items():
             lines.append(f"  {k}: {v}")
     return "\n".join(lines)
-
-
-if __name__ == "__main__":
-    cfg = load_config()
-    print(format_config(cfg))

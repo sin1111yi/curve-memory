@@ -1,6 +1,6 @@
 name: curve-memory
 version: 1.0.0
 description: "遗忘曲线记忆系统 — R(t) = 0.462 + 0.538·exp(-t/2.71) + 三路混合检索 (BM25 + Embedding + R(t)) + 双层归档"
+author: Snowlyn
 hooks:
-  - on_memory_prefetch
   - on_session_end
