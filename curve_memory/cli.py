@@ -553,6 +553,125 @@ def cmd_config(args):
         print(f"加载配置失败: {e}")
 
 
+def cmd_deactivate(args):
+    """停用：重设 memory.plugin，保留数据"""
+    import subprocess
+    try:
+        subprocess.run(["hermes", "config", "unset", "memory.plugin"],
+                       capture_output=True, timeout=10)
+        print("✅ curve-memory 已停用（数据已保留）")
+        print("   启用: curve-memory activate")
+    except Exception as e:
+        print(f"⚠️  {e}")
+        print("   手动: hermes config unset memory.plugin")
+
+
+def cmd_activate(args):
+    """重新激活"""
+    import subprocess
+    try:
+        subprocess.run(["hermes", "config", "set", "memory.plugin", "curve-memory"],
+                       capture_output=True, timeout=10)
+        print("✅ curve-memory 已启用")
+        print("   重启: hermes gateway restart")
+    except Exception as e:
+        print(f"⚠️  {e}")
+        print("   手动: hermes config set memory.plugin curve-memory")
+
+
+def cmd_undo(args):
+    """撤销最近的 touch/forget 操作"""
+    try:
+        from curve_memory.core.activity_log import get_recent_ops
+        from curve_memory.core.activity import parse_activity, format_activity
+    except ModuleNotFoundError:
+        from activity_log import get_recent_ops
+        from activity import parse_activity, format_activity
+
+    ops = get_recent_ops(10)
+    if not ops:
+        print("没有可撤销的操作")
+        return
+
+    print("最近操作:")
+    for i, op in enumerate(ops):
+        ts = op.get("ts", 0)
+        from datetime import datetime
+        tstr = datetime.fromtimestamp(ts).strftime("%H:%M")
+        print(f"  [{i}] {tstr} {op['op']:8s} {op['topic']}")
+
+    print("\n撤销: curve-memory touch <topic> 或 curve-memory recover <topic>")
+
+
+def cmd_stats(args):
+    """详细统计"""
+    from curve_memory.core.activity_log import get_op_stats, get_recent_ops
+    from curve_memory.core.tier import forgetting_curve, r_to_tier_name
+    from curve_memory.core.activity import parse_activity
+
+    activity_path = Path.home() / ".hermes" / "memories" / "ACTIVITY.yaml"
+    if activity_path.exists():
+        raw = activity_path.read_text()
+        data = parse_activity(raw)
+        memories = data.get("memories", {})
+        active_count = len(memories)
+
+        # TIER 分布
+        tier_dist = {}
+        total_t = 0
+        for topic, info in memories.items():
+            t = info.get("t", 0)
+            total_t += t
+            r = forgetting_curve(t)
+            tier = r_to_tier_name(r)
+            tier_dist[tier] = tier_dist.get(tier, 0) + 1
+
+        avg_t = total_t / active_count if active_count else 0
+
+        print("=== Curve Memory Stats ===")
+        print(f"  活跃记忆:     {active_count}")
+        print(f"  平均 t 值:    {avg_t:.1f} 天")
+        print(f"  平均 R(t):    {forgetting_curve(avg_t):.4f}")
+        print(f"\n  TIER 分布:")
+        for tier in ["TIER_5 🔥", "TIER_4 📗", "TIER_3 📙", "TIER_2 📕", "TIER_1 📦", "ARCHIVE 🗄️"]:
+            c = tier_dist.get(tier, 0)
+            bar = "█" * c
+            print(f"    {tier:15s}: {c:2d} {bar}")
+
+    else:
+        print("ACTIVITY.yaml 不存在")
+
+    # 操作统计
+    op_stats = get_op_stats()
+    if op_stats:
+        print(f"\n  操作统计:")
+        for op, count in sorted(op_stats.items(), key=lambda x: -x[1]):
+            print(f"    {op}: {count}")
+
+    # 索引
+    emb_dir = Path.home() / ".hermes" / "memories" / ".embedding_index"
+    if emb_dir.exists():
+        size = sum(f.stat().st_size for f in emb_dir.glob("*.jsonl"))
+        print(f"\n  嵌入索引:     {len(list(emb_dir.glob('*.jsonl')))} 文件, {size/1024:.0f} KB")
+
+
+def cmd_export(args):
+    """导出记忆数据为 tar.gz"""
+    import tarfile, tempfile
+    memories_dir = Path.home() / ".hermes" / "memories"
+    knowledge_dir = Path.home() / ".hermes" / "knowledge"
+    output = args.output
+
+    print(f"导出到 {output}...")
+    with tarfile.open(output, "w:gz") as tar:
+        for d in [memories_dir / "active", memories_dir / "archive",
+                   memories_dir / "ACTIVITY.yaml", memories_dir / "MEMORY.md",
+                   knowledge_dir]:
+            if d.exists():
+                tar.add(str(d), arcname=str(d.relative_to(Path.home() / ".hermes")))
+    print(f"✅ 导出完成 ({Path(output).stat().st_size / 1024:.0f} KB)")
+
+
 def cmd_install_wizard(args):
     """交互式安装向导：检查依赖、初始化、配置"""
     ok, ng, warn = "✅", "❌", "⚠️"
@@ -717,6 +836,27 @@ def main():
     # config
     p_config = sub.add_parser("config", help="查看当前配置")
     p_config.set_defaults(func=cmd_config)
+
+    # deactivate
+    p_deact = sub.add_parser("deactivate", help="停用曲线记忆系统（保留数据）")
+    p_deact.set_defaults(func=cmd_deactivate)
+
+    # activate
+    p_act = sub.add_parser("activate", help="重新激活曲线记忆系统")
+    p_act.set_defaults(func=cmd_activate)
+
+    # undo
+    p_undo = sub.add_parser("undo", help="撤销最近的操作")
+    p_undo.set_defaults(func=cmd_undo)
+
+    # stats
+    p_stats = sub.add_parser("stats", help="详细统计信息")
+    p_stats.set_defaults(func=cmd_stats)
+
+    # export
+    p_export = sub.add_parser("export", help="导出记忆数据")
+    p_export.add_argument("output", nargs="?", default="curve-memory-export.tar.gz", help="输出文件路径")
+    p_export.set_defaults(func=cmd_export)
 
     args = parser.parse_args()
     if hasattr(args, "func"):
