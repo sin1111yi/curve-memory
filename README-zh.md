@@ -123,7 +123,6 @@ t ≥ 30 天 → mv active/*.md → archive/forgotten/
 │  activity.py     ACTIVITY.yaml 读写                   │
 │  embedding.py    ABC EmbeddingProvider + 工厂函数       │
 │  config.py       get_config_schema, 加载/保存配置       │
-│  chunker.py      Markdown H2 章节分割                  │
 │                                                      │
 │  backends/ollama.py   Ollama 嵌入客户端                 │
 └──────────────────────┬───────────────────────────────┘
@@ -255,7 +254,7 @@ hermes gateway restart
 | 嵌入（1 个 chunk） | ~40ms | Ollama qwen3-embedding:8b |
 | 三路融合 | < 1ms | 内存字典运算 |
 | **总检索** | **~50ms** | 三路全开 |
-| 全量索引重建 | ~2 分钟 | 13 个文件 |
+| 全量索引重建 | ~1 分钟/10 个文件 | 取决于 topic 数量 |
 | 增量索引 | ~10s | 仅变更文件 |
 
 500 条记忆的预估索引尺寸：< 10 MB（嵌入）+ < 5 MB（FTS5）。
@@ -374,10 +373,9 @@ hermes curve-memory index --rebuild  # 全量重建
     │   ├── activity.py           # ACTIVITY.yaml 读写
     │   ├── embedding.py          # ABC EmbeddingProvider + 工厂
     │   ├── config.py             # 配置 schema、加载/保存
-    │   └── chunker.py            # H2 章节分块
-    ├── backends/
-    │   ├── __init__.py
-    │   └── ollama.py             # Ollama 嵌入客户端
+    │   └── backends/
+    │       ├── __init__.py
+    │       └── ollama.py             # Ollama 嵌入客户端
     └── skill/
         └── SKILL.md              # Agent 协议文档
 ```

@@ -123,7 +123,6 @@ Frequently-used memories are promoted to permanent knowledge documents instead o
 │  activity.py    ACTIVITY.yaml read/write             │
 │  embedding.py   ABC EmbeddingProvider + factory       │
 │  config.py      get_config_schema, load/save config   │
-│  chunker.py     Markdown H2 section splitting         │
 │                                                      │
 │  backends/ollama.py   Ollama embedding client         │
 └──────────────────────┬───────────────────────────────┘
@@ -258,7 +257,7 @@ curve-memory's tools and prompt blocks become the exclusive source.
 | Embedding (1 chunk) | ~40ms | Ollama qwen3-embedding:8b |
 | Three-way fusion | < 1ms | In-memory dict ops |
 | **Total search** | **~50ms** | All 3 routes active |
-| Full index rebuild | ~2 min | 13 files |
+| Full index rebuild | ~1 min per 10 files | Depends on topic count |
 | Incremental index | ~10s | Only changed files |
 
 Estimated index size for 500 memories: < 10 MB (embeddings) + < 5 MB (FTS5).
@@ -377,10 +376,9 @@ hermes curve-memory index --rebuild  # Full rebuild from scratch
     │   ├── activity.py           # ACTIVITY.yaml read/write
     │   ├── embedding.py          # ABC EmbeddingProvider + factory
     │   ├── config.py             # Config schema, load/save config
-    │   └── chunker.py            # H2 section chunking
-    ├── backends/
-    │   ├── __init__.py
-    │   └── ollama.py             # Ollama embedding client
+    │   └── backends/
+    │       ├── __init__.py
+    │       └── ollama.py             # Ollama embedding client
     └── skill/
         └── SKILL.md              # Agent protocol document
 ```
