@@ -440,6 +440,33 @@ if embedder:
         except Exception as e:
             logger.debug("Index cron registration failed: %s", e)
 
+    def _remove_index_cron(self):
+        """清理 index sweep cron 注册和脚本（shutdown 时调用）"""
+        try:
+            # 1. 从 jobs.json 移除
+            cron_file = self._base / "cron" / "jobs.json"
+            if cron_file.exists():
+                data = json.loads(cron_file.read_text())
+                before = len(data.get("jobs", []))
+                data["jobs"] = [
+                    j for j in data.get("jobs", [])
+                    if j.get("name") != self._index_cron_name
+                ]
+                after = len(data.get("jobs", []))
+                if after < before:
+                    data["updated_at"] = __import__("datetime").datetime.now().isoformat()
+                    cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    logger.debug("Removed index sweep cron from jobs.json")
+
+            # 2. 删除独立脚本
+            script_path = self._base / "scripts" / self._index_cron_script_name
+            if script_path.exists():
+                script_path.unlink()
+                logger.debug("Removed index sweep script: %s", script_path)
+
+        except Exception as e:
+            logger.debug("Index cron removal error: %s", e)
+
     # ── Migration / cleanup ─────────────────────────────────────────
 
     def _migrate_t_values(self):
@@ -724,6 +751,8 @@ if embedder:
 
     def shutdown(self):
         self._save_user_profile()
+        # 清理 index sweep cron 注册和脚本
+        self._remove_index_cron()
         self._searcher = None
         self._embedder = None
         self._cfg = {}
