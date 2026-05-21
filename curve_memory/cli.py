@@ -304,12 +304,33 @@ def cmd_setup(args):
 
 
 def cmd_uninstall(args):
-    """卸载：清除 cron 软链接、cron 任务、选项性清除数据"""
-    import shutil
-    import json
+    """卸载：清除 cron 脚本、cron 任务、配置、选项性清除数据"""
+    import shutil, json, subprocess
     scripts_dir = Path.home() / ".hermes" / "scripts"
     memories_dir = Path.home() / ".hermes" / "memories"
     knowledge_dir = Path.home() / ".hermes" / "knowledge"
+
+    # 确认
+    if not args.yes:
+        try:
+            confirm = input("⚠️  确定要卸载 curve-memory 吗？数据将保留。[y/N] ")
+            if confirm.lower() != 'y':
+                print("已取消")
+                return
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return
+
+    if args.all:
+        print("⚠️  这将删除所有记忆数据，包括 knowledge/ 中的永久知识！")
+        try:
+            confirm = input("再次确认：输入 'delete all' 继续：")
+            if confirm != 'delete all':
+                print("已取消")
+                return
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return
 
     print("=== Uninstalling curve-memory ===")
 
@@ -334,7 +355,15 @@ def cmd_uninstall(args):
         cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
         print(f"  ✅ Removed {before - after} cron job(s)")
 
-    # 3. 清除数据（仅 --all 时）
+    # 3. 清理 memory.plugin 配置
+    try:
+        subprocess.run(["hermes", "config", "unset", "memory.plugin"],
+                       capture_output=True, timeout=10)
+        print("  ✅ Cleared memory.plugin config")
+    except Exception:
+        print("  ⚠️  Run manually: hermes config unset memory.plugin")
+
+    # 4. 清除数据（仅 --all 时）
     if args.all:
         for d in [memories_dir / ".embedding_index",
                    memories_dir / ".fts5",
@@ -495,6 +524,7 @@ def main():
     # uninstall
     p_uninstall = sub.add_parser("uninstall", help="卸载：清除软链接、cron、数据")
     p_uninstall.add_argument("--all", action="store_true", help="同时清除记忆数据")
+    p_uninstall.add_argument("-y", "--yes", action="store_true", help="跳过确认")
     p_uninstall.set_defaults(func=cmd_uninstall)
 
     # install-wizard
