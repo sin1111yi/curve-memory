@@ -64,13 +64,16 @@ def _touch_memory(topic: str):
 
 
 def _extract_mentioned_topics(text: str) -> list:
+    """使用单词边界匹配提取提到的记忆主题，避免误匹配"""
+    import re
     topics = set()
     mem_dir = Path.home() / ".hermes" / "memories" / "active"
     if not mem_dir.exists():
         return []
     for f in mem_dir.glob("*.md"):
         topic = f.stem
-        if topic.lower() in text.lower():
+        pattern = re.compile(r'\b' + re.escape(topic.lower()) + r'\b')
+        if pattern.search(text.lower()):
             topics.add(topic)
     return list(topics)
 
