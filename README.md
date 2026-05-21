@@ -200,7 +200,7 @@ pip install numpy
 
 ```bash
 # 1. Install from GitHub
-hermes plugins install git@github.com:sin1111yi/curve-memory.git
+hermes plugins install https://github.com/sin1111yi/curve-memory.git
 
 # 2. Enable and configure
 hermes plugins enable curve-memory

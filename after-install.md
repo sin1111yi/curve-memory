@@ -51,7 +51,7 @@ python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py search "test"
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `cli.py: command not found` | Plugin not installed | `hermes plugins install git@github.com:sin1111yi/curve-memory.git` |
+| `cli.py: command not found` | Plugin not installed | `hermes plugins install https://github.com/sin1111yi/curve-memory.git` |
 | `Ollama connection refused` | Ollama not running | `ollama serve` or check Ollama installation |
 | `index --rebuild` fails | Embedding model not found | `ollama pull qwen3-embedding:8b` |
 | Search returns 0 results | Index not built | `python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py index --rebuild` |
