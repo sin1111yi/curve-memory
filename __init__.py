@@ -11,26 +11,21 @@ Curve-memory plugin — 遗忘曲线记忆系统
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
-
-# 将插件自身目录加入 path，以便导入 core 模块
-_PLUGIN_DIR = Path(__file__).parent
-if str(_PLUGIN_DIR) not in sys.path:
-    sys.path.insert(0, str(_PLUGIN_DIR))
-
-# 同时将 scripts/ 加入 path 作为后备
-_SCRIPTS_DIR = Path.home() / ".hermes" / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "curve-memory"
 PLUGIN_VERSION = "1.0.0"
 
-__all__: list[str] = []
+# 确保子模块可导入
+_PLUGIN_DIR = Path(__file__).parent
+if str(_PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_DIR))
+
+# 暴露 MemoryProvider 子类供发现系统使用
+from curve_memory.provider import CurveMemoryProvider
 
 
 def register(ctx):

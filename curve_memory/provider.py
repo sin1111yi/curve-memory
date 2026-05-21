@@ -10,9 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_PLUGIN_DIR = Path(__file__).parent
+_PLUGIN_DIR = Path(__file__).parent.parent  # plugins/curve-memory/
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
+_CORE_DIR = Path(__file__).parent / "core"  # plugins/curve-memory/curve_memory/core/
+if str(_CORE_DIR) not in sys.path:
+    sys.path.insert(0, str(_CORE_DIR))
 
 logger = logging.getLogger(__name__)
 
