@@ -672,6 +672,25 @@ def cmd_export(args):
     print(f"✅ 导出完成 ({Path(output).stat().st_size / 1024:.0f} KB)")
 
 
+def cmd_plot(args):
+    """ASCII 显示 R(t) 曲线"""
+    from curve_memory.core.tier import forgetting_curve, r_to_tier_name
+
+    print("=== R(t) 遗忘曲线 ===")
+    print("R(t) = 0.462 + 0.538 * exp(-t / 2.71)")
+    print()
+    print("天  R(t)    TIER")
+    print("-" * 30)
+    for t in range(0, 35, 1):
+        r = forgetting_curve(t)
+        tier = r_to_tier_name(r)
+        bar_len = int((r - 0.462) / 0.538 * 30)
+        bar = "█" * bar_len
+        print(f"{t:2d}  {r:.4f}  {tier:12s} {bar}")
+    print()
+    print("图例: 每个 █ 代表约 3.3% 的保留率")
+
+
 def cmd_install_wizard(args):
     """交互式安装向导：检查依赖、初始化、配置"""
     ok, ng, warn = "✅", "❌", "⚠️"
@@ -857,6 +876,10 @@ def main():
     p_export = sub.add_parser("export", help="导出记忆数据")
     p_export.add_argument("output", nargs="?", default="curve-memory-export.tar.gz", help="输出文件路径")
     p_export.set_defaults(func=cmd_export)
+
+    # plot
+    p_plot = sub.add_parser("plot", help="显示 R(t) 曲线 ASCII 图")
+    p_plot.set_defaults(func=cmd_plot)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

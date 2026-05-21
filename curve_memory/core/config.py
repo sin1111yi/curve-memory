@@ -40,30 +40,55 @@ DEFAULT_CONFIG = {
 
 
 def load_config() -> dict:
-    """加载插件配置，缺失项使用默认值"""
+    """加载插件配置，缺失项使用默认值。支持环境变量覆盖。"""
     config_path = Path.home() / ".hermes" / "config.yaml"
     if not config_path.exists():
-        return _deep_copy(DEFAULT_CONFIG)
+        cfg = _deep_copy(DEFAULT_CONFIG)
+    else:
+        try:
+            raw = config_path.read_text(encoding="utf-8")
+            hermes_cfg = parse_activity(raw)
+        except Exception:
+            cfg = _deep_copy(DEFAULT_CONFIG)
+            cfg = _apply_env_overrides(cfg)
+            return cfg
 
-    try:
-        raw = config_path.read_text(encoding="utf-8")
-        hermes_cfg = parse_activity(raw)
-    except Exception:
-        return _deep_copy(DEFAULT_CONFIG)
+        plugin_cfg = _extract_plugin_config(raw)
+        if not plugin_cfg:
+            cfg = _deep_copy(DEFAULT_CONFIG)
+        else:
+            merged = _deep_copy(DEFAULT_CONFIG)
+            for section in ("embedding", "search", "tier"):
+                if section in plugin_cfg and isinstance(plugin_cfg[section], dict):
+                    merged[section].update(plugin_cfg[section])
+            cfg = merged
 
-    # 从 memory.curve-memory 读取插件配置
-    # Hermes 的 config.yaml 结构: memory: { plugin: ..., curve-memory: { ... } }
-    # 简化 YAML 解析拿到 memory 块
-    plugin_cfg = _extract_plugin_config(raw)
-    if not plugin_cfg:
-        return _deep_copy(DEFAULT_CONFIG)
+    cfg = _apply_env_overrides(cfg)
+    return cfg
 
-    # 深度合并
-    merged = _deep_copy(DEFAULT_CONFIG)
-    for section in ("embedding", "search", "tier"):
-        if section in plugin_cfg and isinstance(plugin_cfg[section], dict):
-            merged[section].update(plugin_cfg[section])
-    return merged
+
+def _apply_env_overrides(cfg: dict) -> dict:
+    """环境变量覆盖配置"""
+    import os
+    env_map = {
+        "CURVE_MEMORY_EMBEDDING_MODEL": ("embedding", "model"),
+        "CURVE_MEMORY_EMBEDDING_URL": ("embedding", "base_url"),
+        "CURVE_MEMORY_ALPHA": ("search", "alpha"),
+        "CURVE_MEMORY_BETA": ("search", "beta"),
+        "CURVE_MEMORY_GAMMA": ("search", "gamma"),
+        "CURVE_MEMORY_ARCHIVE_DAYS": ("tier", "archive_threshold_days"),
+    }
+    for env_name, (section, key) in env_map.items():
+        val = os.environ.get(env_name)
+        if val is not None:
+            try:
+                if "." in val:
+                    cfg[section][key] = float(val)
+                else:
+                    cfg[section][key] = int(val)
+            except ValueError:
+                cfg[section][key] = val
+    return cfg
 
 
 def _extract_plugin_config(raw: str) -> dict:
