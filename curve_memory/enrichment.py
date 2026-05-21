@@ -457,12 +457,24 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
                         "vector": vector,
                     }
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            result["indexed"] += 1
-            result["details"].append({
-                "topic": topic, "status": "ok",
-                "chunks": len(chunks),
-            })
+            # 写入成功后才计入
+            if index_path.stat().st_size > 0:
+                result["indexed"] += 1
+                result["details"].append({
+                    "topic": topic, "status": "ok",
+                    "chunks": len(chunks),
+                })
+            else:
+                index_path.unlink(missing_ok=True)
+                result["errors"] += 1
+                result["details"].append({
+                    "topic": topic, "status": "error",
+                    "message": "embed produced empty file",
+                })
         except Exception as e:
+            # 清理空文件
+            if index_path.exists() and index_path.stat().st_size == 0:
+                index_path.unlink(missing_ok=True)
             result["errors"] += 1
             result["details"].append({
                 "topic": topic, "status": "error",
