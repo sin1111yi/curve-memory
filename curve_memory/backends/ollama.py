@@ -7,7 +7,7 @@ from typing import List
 import urllib.request
 import urllib.error
 
-from ..core.embedding_provider import EmbeddingProvider
+from ..core.embedding import EmbeddingProvider
 
 
 class OllamaBackend(EmbeddingProvider):

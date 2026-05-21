@@ -91,10 +91,12 @@ def _fmt_val(v):
     return str(v)
 
 
-def load_activity(path: Optional[Path] = None) -> dict:
+def load_activity(memories_dir: Optional[Path] = None) -> dict:
     """加载 ACTIVITY.yaml"""
-    if path is None:
+    if memories_dir is None:
         path = Path.home() / ".hermes" / "memories" / "ACTIVITY.yaml"
+    else:
+        path = Path(memories_dir) / "ACTIVITY.yaml"
     if not path.exists():
         return {}
     raw = path.read_text(encoding="utf-8")

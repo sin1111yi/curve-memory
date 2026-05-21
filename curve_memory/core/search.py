@@ -9,12 +9,12 @@ search.py — 三路混合检索核心
 import json
 import math
 import sqlite3
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import sys
 
-sys.path.insert(0, str(Path(__file__).parent))
 from curve_memory.core.tier import forgetting_curve, r_to_tier_name, r_to_tier_level
+from curve_memory.core.activity import parse_activity
 
 # === 默认权重 ===
 ALPHA = 0.35  # BM25
@@ -92,8 +92,18 @@ class HybridSearch:
             for topic in all_topics:
                 if query_lower in topic.lower():
                     keyword_scores[topic] = 1.0
-        r_values = {t: forgetting_curve(info.get("t", 0))
-                    for t, info in activity.items()}
+
+        # Compute R(t) from timestamp if available, otherwise use raw t value
+        now = time.time()
+        r_values = {}
+        for t, info in activity.items():
+            raw_t = info.get("t", 0)
+            # If t is a Unix timestamp (>= 1e12), compute delta in days
+            if isinstance(raw_t, (int, float)) and raw_t > 1000000000000:
+                t_days = (now - raw_t) / 86400
+            else:
+                t_days = raw_t
+            r_values[t] = forgetting_curve(t_days)
 
         # 归一化
         bm25_norm = self._normalize_minmax(bm25_scores)
@@ -176,7 +186,7 @@ class HybridSearch:
                 return {}
 
             # 加载索引
-            from curve_memory.core.embedding_provider import load_embedding_index, cosine_similarity
+            from curve_memory.core.embedding import load_embedding_index, cosine_similarity
             index = load_embedding_index(self.embedding_dir)
 
             # 对每个 topic 取最大 chunk 相似度
@@ -203,9 +213,6 @@ class HybridSearch:
         """加载 ACTIVITY.yaml"""
         if not self.activity_path.exists():
             return {}
-        # 简易解析
-        sys.path.insert(0, str(self.memories_dir.parent / "scripts"))
-        from curve_memory.core.activity import parse_activity
         raw = self.activity_path.read_text(encoding="utf-8")
         data = parse_activity(raw)
         return data.get("memories", {})
