@@ -253,12 +253,14 @@ def cmd_check(args):
 
 
 def cmd_setup(args):
-    """创建 cron 脚本软链接"""
+    """创建 cron 脚本软链接和定时任务"""
     import os
+    import json
     scripts_dir = Path.home() / ".hermes" / "scripts"
     plugin_core = Path.home() / ".hermes" / "plugins" / "curve-memory" / "curve_memory" / "core"
     scripts_dir.mkdir(parents=True, exist_ok=True)
 
+    # 1. 软链接
     links = [
         ("curve-memory-forgetting.py", "forgetting.py"),
         ("curve-memory-indexer.py", "indexer.py"),
@@ -266,12 +268,37 @@ def cmd_setup(args):
     for link_name, target in links:
         link_path = scripts_dir / link_name
         target_path = plugin_core / target
-        if link_path.exists():
+        if link_path.exists() or link_path.is_symlink():
             link_path.unlink()
         os.symlink(str(target_path), str(link_path))
-        print(f"  ✅ {link_name}")
+        print(f"  ✅ Symlink: {link_name}")
 
-    print(f"Setup complete. Cron scripts ready at {scripts_dir}")
+    # 2. 恢复 cron 任务
+    cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
+    if cron_file.exists():
+        data = json.loads(cron_file.read_text())
+        existing_names = {j.get("name") for j in data.get("jobs", [])}
+
+        new_jobs = []
+        if "snowlyn-memory-decay" not in existing_names:
+            new_jobs.append({
+                "name": "snowlyn-memory-decay",
+                "script": "curve-memory-forgetting.py",
+                "no_agent": True,
+            })
+        if "snowlyn-memory-index" not in existing_names:
+            new_jobs.append({
+                "name": "snowlyn-memory-index",
+                "script": "curve-memory-indexer.py",
+                "no_agent": True,
+            })
+
+        if new_jobs:
+            print(f"  ℹ️  Cron jobs not restored (use 'hermes cron' to add manually)")
+            print(f"     Run: hermes cron create --script curve-memory-forgetting.py --schedule '0 3 * * *'")
+            print(f"     Run: hermes cron create --script curve-memory-indexer.py --schedule '45 3 * * *'")
+
+    print(f"Setup complete. Cron scripts at {scripts_dir}")
 
 
 def main():
