@@ -542,7 +542,10 @@ def cmd_recover(args):
 
 
 def cmd_config(args):
-    """查看当前配置"""
+    """查看当前配置或交互式配置"""
+    if args.interactive:
+        _interactive_config()
+        return
     try:
         from curve_memory.core.config import load_config, format_config
         cfg = load_config()
@@ -550,6 +553,74 @@ def cmd_config(args):
         print("\n要修改配置，编辑 ~/.hermes/config.yaml 中的 memory.curve-memory 段。")
     except Exception as e:
         print(f"加载配置失败: {e}")
+
+
+def _interactive_config():
+    """交互式配置向导"""
+    import os, subprocess
+    config_path = Path.home() / ".hermes" / "config.yaml"
+
+    # 读取或初始化配置段
+    raw = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    if "memory:" not in raw:
+        raw += "\nmemory:\n  plugin: curve-memory\n  curve-memory:\n    embedding:\n      model: qwen3-embedding:8b\n      base_url: http://localhost:11434\n    search:\n      alpha: 0.35\n      beta: 0.45\n      gamma: 0.20\n      top_k: 5\n    tier:\n      archive_threshold_days: 30\n      mature_access_count: 20\n      mature_t_days: 3\n"
+
+    # 交互式修改—逐项询问
+    prompts = [
+        ("嵌入模型", "embedding", "model", "qwen3-embedding:8b"),
+        ("Ollama 地址", "embedding", "base_url", "http://localhost:11434"),
+        ("关键词权重 (alpha)", "search", "alpha", "0.35"),
+        ("语义权重 (beta)", "search", "beta", "0.45"),
+        ("新鲜度权重 (gamma)", "search", "gamma", "0.20"),
+        ("归档天数", "tier", "archive_threshold_days", "30"),
+    ]
+
+    print("=== Curve Memory 配置向导 ===")
+    print("直接回车使用默认值。\n")
+
+    lines = raw.split("\n")
+    for label, section, key, default in prompts:
+        current = default
+        # 从 lines 中找当前值
+        for i, line in enumerate(lines):
+            if line.strip().startswith(f"{key}:"):
+                parts = line.split(":", 1)
+                if len(parts) == 2:
+                    current = parts[1].strip().strip("'\"")
+                break
+
+        try:
+            val = input(f"  {label} [{current}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return
+
+        if val:
+            # 更新 lines
+            found = False
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith(f"{key}:") or stripped.startswith(f"# {key}:"):
+                    indent = line[:len(line) - len(line.lstrip())]
+                    lines[i] = f"{indent}{key}: {val}"
+                    found = True
+                    break
+            if not found:
+                # 在对应 section 下追加
+                for i, line in enumerate(lines):
+                    if line.strip() == f"{section}:":
+                        # 找 section 下的缩进
+                        for j in range(i + 1, min(i + 5, len(lines))):
+                            if lines[j].strip() and not lines[j].strip().startswith("#"):
+                                indent = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
+                                lines.insert(j, f"{indent}{key}: {val}")
+                                break
+                        break
+
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n✅ 配置已更新")
+    print("   查看: curve-memory config")
+    print("   重启: hermes gateway restart")
 
 
 def cmd_deactivate(args):
@@ -852,7 +923,8 @@ def main():
     p_recover.set_defaults(func=cmd_recover)
 
     # config
-    p_config = sub.add_parser("config", help="查看当前配置")
+    p_config = sub.add_parser("config", help="查看当前配置或交互式配置")
+    p_config.add_argument("-i", "--interactive", action="store_true", help="交互式配置向导")
     p_config.set_defaults(func=cmd_config)
 
     # deactivate
