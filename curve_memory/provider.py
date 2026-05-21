@@ -123,21 +123,22 @@ try:
 
         def prefetch(self, query: str, *, session_id: str = "") -> str:
             if not self._searcher or not query.strip():
-                return ""
+                return "<!-- curve-memory: searcher not initialized -->"
             try:
                 results = self._searcher.search(query, top_k=3)
                 if not results:
-                    return ""
+                    return f"<!-- curve-memory: degrade={self._searcher.degrade_level}, no results -->"
                 blocks = []
                 for topic, score, snippet, r in results:
                     from curve_memory.core.tier import r_to_tier_name
                     tier = r_to_tier_name(r)
                     blocks.append(f"### {topic} ({tier})\n{snippet}")
                     self._touched_topics.add(topic)
-                return "## 召回记忆\n\n" + "\n\n".join(blocks)
+                diag = f"<!-- curve-memory: degrade={self._searcher.degrade_level}, results={len(results)} -->"
+                return diag + "\n\n## 召回记忆\n\n" + "\n\n".join(blocks)
             except Exception as e:
                 logger.debug("prefetch error: %s", e)
-                return ""
+                return f"<!-- curve-memory: error={e} -->"
 
         def sync_turn(self, user: str, asst: str):
             mentioned = _extract_mentioned_topics(user)
