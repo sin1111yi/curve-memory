@@ -556,70 +556,105 @@ def cmd_config(args):
 
 
 def _interactive_config():
-    """交互式配置向导"""
-    import os, subprocess
+    """交互式配置向导 — 安全地读写 memory.curve-memory 段"""
+    import os
     config_path = Path.home() / ".hermes" / "config.yaml"
 
-    # 读取或初始化配置段
+    # 读取完整配置
     raw = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    if "memory:" not in raw:
-        raw += "\nmemory:\n  plugin: curve-memory\n  curve-memory:\n    embedding:\n      model: qwen3-embedding:8b\n      base_url: http://localhost:11434\n    search:\n      alpha: 0.35\n      beta: 0.45\n      gamma: 0.20\n      top_k: 5\n    tier:\n      archive_threshold_days: 30\n      mature_access_count: 20\n      mature_t_days: 3\n"
+    lines = raw.split("\n")
 
-    # 交互式修改—逐项询问
+    # 定位 memory.curve-memory 段的起止行
+    section_start = None
+    section_end = None
+    in_memory = False
+    in_curve = False
+    curve_indent = 0
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # 跳过空行和注释
+        if not stripped or stripped.startswith("#"):
+            continue
+        # 检测 memory: 顶层键
+        if stripped == "memory:" or stripped.startswith("memory:"):
+            in_memory = True
+            continue
+        if not in_memory:
+            continue
+        # 检测 curve-memory:
+        space = len(line) - len(line.lstrip())
+        if stripped == "curve-memory:" or stripped.startswith("curve-memory:"):
+            in_curve = True
+            curve_indent = space
+            section_start = i
+            continue
+        if in_curve:
+            # 如果缩进回到 curve_indent 同等或更少 → 段结束
+            if space <= curve_indent and stripped:
+                section_end = i
+                break
+    if section_start is not None and section_end is None:
+        section_end = len(lines)
+
+    # 如果没有 curve-memory 段，追加
+    if section_start is None:
+        raw += "\nmemory:\n  plugin: curve-memory\n  curve-memory:\n    embedding:\n      model: qwen3-embedding:8b\n      base_url: http://localhost:11434\n    search:\n      alpha: 0.35\n      beta: 0.45\n      gamma: 0.20\n      top_k: 5\n    tier:\n      archive_threshold_days: 30\n      mature_access_count: 20\n      mature_t_days: 3\n"
+        lines = raw.split("\n")
+        # 重新定位
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == "curve-memory:" or stripped.startswith("curve-memory:"):
+                section_start = i
+                curve_indent = len(line) - len(line.lstrip())
+                break
+        section_end = len(lines)
+
+    # 只提取 curve-memory 段的行
+    section_lines = lines[section_start:section_end]
+
     prompts = [
-        ("嵌入模型", "embedding", "model", "qwen3-embedding:8b"),
-        ("Ollama 地址", "embedding", "base_url", "http://localhost:11434"),
-        ("关键词权重 (alpha)", "search", "alpha", "0.35"),
-        ("语义权重 (beta)", "search", "beta", "0.45"),
-        ("新鲜度权重 (gamma)", "search", "gamma", "0.20"),
-        ("归档天数", "tier", "archive_threshold_days", "30"),
+        ("嵌入模型", "model", "qwen3-embedding:8b"),
+        ("Ollama 地址", "base_url", "http://localhost:11434"),
+        ("关键词权重 (alpha)", "alpha", "0.35"),
+        ("语义权重 (beta)", "beta", "0.45"),
+        ("新鲜度权重 (gamma)", "gamma", "0.20"),
+        ("归档天数", "archive_threshold_days", "30"),
     ]
 
     print("=== Curve Memory 配置向导 ===")
     print("直接回车使用默认值。\n")
 
-    lines = raw.split("\n")
-    for label, section, key, default in prompts:
+    for label, key, default in prompts:
         current = default
-        # 从 lines 中找当前值
-        for i, line in enumerate(lines):
+        for line in section_lines:
             if line.strip().startswith(f"{key}:"):
                 parts = line.split(":", 1)
                 if len(parts) == 2:
                     current = parts[1].strip().strip("'\"")
                 break
-
         try:
             val = input(f"  {label} [{current}]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n已取消")
             return
-
         if val:
-            # 更新 lines
-            found = False
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped.startswith(f"{key}:") or stripped.startswith(f"# {key}:"):
+            for j, line in enumerate(section_lines):
+                if line.strip().startswith(f"{key}:") or line.strip().startswith(f"# {key}:"):
                     indent = line[:len(line) - len(line.lstrip())]
-                    lines[i] = f"{indent}{key}: {val}"
-                    found = True
+                    section_lines[j] = f"{indent}{key}: {val}"
                     break
-            if not found:
-                # 在对应 section 下追加
-                for i, line in enumerate(lines):
-                    if line.strip() == f"{section}:":
-                        # 找 section 下的缩进
-                        for j in range(i + 1, min(i + 5, len(lines))):
-                            if lines[j].strip() and not lines[j].strip().startswith("#"):
-                                indent = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
-                                lines.insert(j, f"{indent}{key}: {val}")
-                                break
-                        break
+            else:
+                # key 不存在，在 section 第一行后插入
+                indent = " " * (curve_indent + 4)
+                section_lines.insert(1, f"{indent}{key}: {val}")
+                section_end += 1
 
+    # 把修改后的 section_lines 写回 lines
+    lines[section_start:section_end] = section_lines
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n✅ 配置已更新")
-    print("   查看: curve-memory config")
+    print("   查看: python3 cli.py config")
     print("   重启: hermes gateway restart")
 
 
