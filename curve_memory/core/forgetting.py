@@ -18,11 +18,21 @@ import os
 import shutil
 import sys
 import math
+import time
 from datetime import datetime
 from pathlib import Path
 
-# 将脚本目录加入 path，以便导入 tier.py
-pass # path managed by plugin system
+# 当从 ~/.hermes/scripts/ 独立运行时，添加插件路径
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PLUGIN_CORE_DIR = Path.home() / ".hermes" / "plugins" / "curve-memory"
+if _PLUGIN_CORE_DIR.exists() and str(_PLUGIN_CORE_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_CORE_DIR))
+_PARENT = _SCRIPT_DIR.parent.parent  # plugins/curve-memory/
+if str(_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PARENT))
+
+LOCK_TIMEOUT = 1800  # 30 分钟超时
+
 from curve_memory.core.tier import forgetting_curve, r_to_tier_name, should_archive, is_mature, BASE_RATE, EPSILON
 from curve_memory.core.activity import parse_activity, format_activity
 
@@ -40,9 +50,14 @@ logs = []
 
 
 def acquire_lock() -> bool:
-    """获取文件锁，防止竞态"""
+    """获取文件锁，30 分钟超时"""
     if LOCK_FILE.exists():
-        return False
+        age = time.time() - LOCK_FILE.stat().st_mtime
+        if age > LOCK_TIMEOUT:
+            logs.append(f"⚠️  Stale lock (age={age:.0f}s), removing")
+            LOCK_FILE.unlink()
+        else:
+            return False
     LOCK_FILE.write_text(str(os.getpid()))
     return True
 

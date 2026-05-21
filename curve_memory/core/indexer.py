@@ -17,6 +17,17 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# 当从 ~/.hermes/scripts/ 独立运行时，添加插件路径
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PLUGIN_CORE_DIR = Path.home() / ".hermes" / "plugins" / "curve-memory"
+if _PLUGIN_CORE_DIR.exists() and str(_PLUGIN_CORE_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_CORE_DIR))
+_PARENT = _SCRIPT_DIR.parent.parent
+if str(_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PARENT))
+
+LOCK_TIMEOUT = 1800  # 30 分钟超时
+
 # 将脚本目录加入 path
 pass # path managed by plugin system
 from curve_memory.core.chunker import chunk_file, chunk_tier_summary
