@@ -240,6 +240,28 @@ def cmd_check(args):
     print(f"[6/6] Cron: check with 'hermes cron list'")
 
 
+def cmd_setup(args):
+    """创建 cron 脚本软链接"""
+    import os
+    scripts_dir = Path.home() / ".hermes" / "scripts"
+    plugin_core = Path.home() / ".hermes" / "plugins" / "curve-memory" / "curve_memory" / "core"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+
+    links = [
+        ("curve-memory-forgetting.py", "forgetting.py"),
+        ("curve-memory-indexer.py", "indexer.py"),
+    ]
+    for link_name, target in links:
+        link_path = scripts_dir / link_name
+        target_path = plugin_core / target
+        if link_path.exists():
+            link_path.unlink()
+        os.symlink(str(target_path), str(link_path))
+        print(f"  ✅ {link_name}")
+
+    print(f"Setup complete. Cron scripts ready at {scripts_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Curve Memory System CLI")
     sub = parser.add_subparsers(dest="command")
@@ -283,6 +305,10 @@ def main():
     # check
     p_check = sub.add_parser("check", help="健康检查")
     p_check.set_defaults(func=cmd_check)
+
+    # setup
+    p_setup = sub.add_parser("setup", help="创建 cron 脚本软链接")
+    p_setup.set_defaults(func=cmd_setup)
 
     args = parser.parse_args()
     if hasattr(args, "func"):
