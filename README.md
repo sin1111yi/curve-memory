@@ -1,6 +1,6 @@
 # curve-memory — Forgetting Curve Memory System
 
-> **⚠️ Alpha — 测试阶段，API 和配置格式可能变更。**
+> **⚠️ Alpha — 测试阶段。本插件接管 Hermes 的记忆系统和用户画像，当前版本可能包含未发现的问题，包括但不限于数据丢失、双系统冲突、配置失效等。请先在测试环境中验证，确认后再在正式环境使用。**
 
 A [Hermes Agent](https://hermes-agent.nousresearch.com) memory plugin that manages AI memories using a scientifically-grounded forgetting curve.
 
