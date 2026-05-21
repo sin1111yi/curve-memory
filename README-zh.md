@@ -206,24 +206,17 @@ hermes plugins install git@github.com:sin1111yi/curve-memory.git
 hermes plugins enable curve-memory
 hermes config set memory.plugin curve-memory
 
+# 初始化：复制 cron 脚本、创建目录、注册定时任务、检查模型
+curve-memory setup
+
 # 初始化索引
 curve-memory index --rebuild
 
 # 重启 gateway
 hermes gateway restart
-```
 
-### 验证安装
-
-```bash
-# 检查插件状态
-hermes plugins list | grep curve
-
-# 运行健康检查
+# 验证
 curve-memory check
-
-# 测试检索
-curve-memory search "R(t) 公式"
 ```
 
 ## CLI 参考

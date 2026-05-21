@@ -206,24 +206,17 @@ hermes plugins install git@github.com:sin1111yi/curve-memory.git
 hermes plugins enable curve-memory
 hermes config set memory.plugin curve-memory
 
+# Setup: copy cron scripts, create directory structure, register cron jobs, check model
+curve-memory setup
+
 # Initialize the index
 curve-memory index --rebuild
 
 # Restart the gateway
 hermes gateway restart
-```
 
-### Verify Installation
-
-```bash
-# Check plugin status
-hermes plugins list | grep curve
-
-# Run health check
+# Verify
 curve-memory check
-
-# Test search
-curve-memory search "R(t) formula"
 ```
 
 ## CLI Reference
