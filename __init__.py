@@ -30,17 +30,28 @@ from curve_memory.provider import CurveMemoryProvider
 
 def register(ctx):
     """Plugin-style registration — called by Hermes plugin system.
-
-    Registers CurveMemoryProvider, tools, and CLI commands.
+    Registers CLI subcommand `curve-memory` under `hermes`.
     """
-    from curve_memory.provider import CurveMemoryProvider
+    def setup_fn(subparser):
+        """Add all curve-memory subcommands as hermes curve-memory <sub>."""
+        from curve_memory.cli import register_subcommands
+        register_subcommands(subparser)
 
-    ctx.register_provider("memory", CurveMemoryProvider)
-    ctx.register_cli("curve-memory", {
-        "help": "遗忘曲线记忆系统",
-        "handler": "curve_memory.cli:main",
-    })
-    logger.info("Curve-memory plugin registered")
+    def cli_handler(args):
+        """Delegate to curve-memory CLI main()."""
+        if hasattr(args, 'func') and args.func:
+            args.func(args)
+        else:
+            from curve_memory.cli import main as curve_main
+            curve_main()
+
+    ctx.register_cli_command(
+        name="curve-memory",
+        help="遗忘曲线记忆系统 — 基于 R(t) 遗忘曲线的记忆管理",
+        setup_fn=setup_fn,
+        handler_fn=cli_handler,
+    )
+    logger.info("Curve-memory CLI registered: hermes curve-memory")
 
 
 def get_provider():

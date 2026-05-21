@@ -853,105 +853,88 @@ def cmd_install_wizard(args):
     print("\n✅ 检查完成。按上述 ⚠️ 提示操作即可。")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Curve Memory System CLI")
-    sub = parser.add_subparsers(dest="command")
-
-    # search
+def register_subcommands(sub):
+    """注册所有子命令到给定的 subparsers 组（供 Hermes 插件系统和 main() 共用）"""
     p_search = sub.add_parser("search", help="三路混合检索")
     p_search.add_argument("query", help="检索关键词")
     p_search.add_argument("--top-k", type=int, default=5, help="返回条数")
     p_search.add_argument("--json", action="store_true", help="JSON 输出")
     p_search.set_defaults(func=cmd_search)
 
-    # index
     p_index = sub.add_parser("index", help="构建索引")
     p_index.add_argument("--rebuild", action="store_true", help="全量重建")
     p_index.add_argument("--incremental", action="store_true", help="增量更新")
     p_index.set_defaults(func=cmd_index)
 
-    # status
     p_status = sub.add_parser("status", help="状态查看")
     p_status.set_defaults(func=cmd_status)
 
-    # touch
     p_touch = sub.add_parser("touch", help="置 t=0")
     p_touch.add_argument("topic", help="记忆主题")
     p_touch.set_defaults(func=cmd_touch)
 
-    # daily-tick
     p_tick = sub.add_parser("daily-tick", help="手动触发每日衰减")
     p_tick.set_defaults(func=cmd_daily_tick)
 
-    # forget
     p_forget = sub.add_parser("forget", help="手动归档")
     p_forget.add_argument("topic", help="记忆主题")
     p_forget.set_defaults(func=cmd_forget)
 
-    # mature
     p_mature = sub.add_parser("mature", help="手动标记成熟")
     p_mature.add_argument("topic", help="记忆主题")
     p_mature.set_defaults(func=cmd_mature)
 
-    # check
     p_check = sub.add_parser("check", help="健康检查")
     p_check.set_defaults(func=cmd_check)
 
-    # setup
     p_setup = sub.add_parser("setup", help="创建 cron 脚本软链接")
     p_setup.set_defaults(func=cmd_setup)
 
-    # uninstall
     p_uninstall = sub.add_parser("uninstall", help="卸载：清除软链接、cron、数据")
     p_uninstall.add_argument("--all", action="store_true", help="同时清除记忆数据")
     p_uninstall.add_argument("-y", "--yes", action="store_true", help="跳过确认")
     p_uninstall.set_defaults(func=cmd_uninstall)
 
-    # install-wizard
     p_wizard = sub.add_parser("install-wizard", help="安装向导：检查依赖并初始化")
     p_wizard.set_defaults(func=cmd_install_wizard)
 
-    # repair
     p_repair = sub.add_parser("repair", help="修复：检查并修复常见问题")
     p_repair.add_argument("--fix", action="store_true", help="自动修复")
     p_repair.set_defaults(func=cmd_repair)
 
-    # recover
     p_recover = sub.add_parser("recover", help="从 archive/ 恢复已归档的记忆")
     p_recover.add_argument("topic", nargs="?", help="主题名称")
     p_recover.add_argument("--list", action="store_true", help="列出可恢复的主题")
     p_recover.set_defaults(func=cmd_recover)
 
-    # config
     p_config = sub.add_parser("config", help="查看当前配置或交互式配置")
     p_config.add_argument("-i", "--interactive", action="store_true", help="交互式配置向导")
     p_config.set_defaults(func=cmd_config)
 
-    # deactivate
     p_deact = sub.add_parser("deactivate", help="停用曲线记忆系统（保留数据）")
     p_deact.set_defaults(func=cmd_deactivate)
 
-    # activate
     p_act = sub.add_parser("activate", help="重新激活曲线记忆系统")
     p_act.set_defaults(func=cmd_activate)
 
-    # undo
     p_undo = sub.add_parser("undo", help="撤销最近的操作")
     p_undo.set_defaults(func=cmd_undo)
 
-    # stats
     p_stats = sub.add_parser("stats", help="详细统计信息")
     p_stats.set_defaults(func=cmd_stats)
 
-    # export
     p_export = sub.add_parser("export", help="导出记忆数据")
     p_export.add_argument("output", nargs="?", default="curve-memory-export.tar.gz", help="输出文件路径")
     p_export.set_defaults(func=cmd_export)
 
-    # plot
     p_plot = sub.add_parser("plot", help="显示 R(t) 曲线 ASCII 图")
     p_plot.set_defaults(func=cmd_plot)
 
+
+def main():
+    parser = argparse.ArgumentParser(description="Curve Memory System CLI")
+    sub = parser.add_subparsers(dest="command")
+    register_subcommands(sub)
     args = parser.parse_args()
     if hasattr(args, "func"):
         args.func(args)
