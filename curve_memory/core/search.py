@@ -34,13 +34,17 @@ DEGRADE_LEVELS = {
 class HybridSearch:
     """三路混合检索器"""
 
-    def __init__(self, memories_dir: Path, embedder=None):
+    def __init__(self, memories_dir: Path, embedder=None,
+                 alpha: float = ALPHA, beta: float = BETA, gamma: float = GAMMA):
         self.memories_dir = Path(memories_dir)
         self.active_dir = self.memories_dir / "active"
         self.embedding_dir = self.memories_dir / ".embedding_index"
         self.fts5_path = self.memories_dir / ".fts5" / "curve_memory_fts5.db"
         self.activity_path = self.memories_dir / "ACTIVITY.yaml"
         self.embedder = embedder
+        self._alpha = alpha
+        self._beta = beta
+        self._gamma = gamma
         self.degrade_level = self._detect_degrade_level()
 
     def _detect_degrade_level(self) -> int:
@@ -61,7 +65,7 @@ class HybridSearch:
             return 4  # 纯 idx 关键词匹配
 
     def search(self, query: str, top_k: int = 5,
-               alpha: float = ALPHA, beta: float = BETA, gamma: float = GAMMA
+               alpha: float = None, beta: float = None, gamma: float = None
                ) -> List[Tuple[str, float, str, float]]:
         """
         三路混合检索。
@@ -103,6 +107,9 @@ class HybridSearch:
             r_norm = {t: (v - min_r) / span for t, v in r_values.items()}
 
         # 融合
+        alpha = alpha if alpha is not None else getattr(self, '_alpha', ALPHA)
+        beta = beta if beta is not None else getattr(self, '_beta', BETA)
+        gamma = gamma if gamma is not None else getattr(self, '_gamma', GAMMA)
         all_scores = {}
         for topic in all_topics:
             score = (alpha * bm25_norm.get(topic, 0) +

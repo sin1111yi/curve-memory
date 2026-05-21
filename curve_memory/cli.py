@@ -542,9 +542,19 @@ def cmd_recover(args):
     print("ℹ️  需手动添加索引: curve-memory index --rebuild")
 
 
+def cmd_config(args):
+    """查看当前配置"""
+    try:
+        from curve_memory.core.config import load_config, format_config
+        cfg = load_config()
+        print(format_config(cfg))
+        print("\n要修改配置，编辑 ~/.hermes/config.yaml 中的 memory.curve-memory 段。")
+    except Exception as e:
+        print(f"加载配置失败: {e}")
+
+
 def cmd_install_wizard(args):
     """交互式安装向导：检查依赖、初始化、配置"""
-    import subprocess, json, shutil
     ok, ng, warn = "✅", "❌", "⚠️"
     print("=== Curve Memory 安装向导 ===\n")
 
@@ -703,6 +713,10 @@ def main():
     p_recover.add_argument("topic", nargs="?", help="主题名称")
     p_recover.add_argument("--list", action="store_true", help="列出可恢复的主题")
     p_recover.set_defaults(func=cmd_recover)
+
+    # config
+    p_config = sub.add_parser("config", help="查看当前配置")
+    p_config.set_defaults(func=cmd_config)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

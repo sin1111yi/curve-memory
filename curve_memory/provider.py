@@ -96,8 +96,14 @@ try:
 
         def initialize(self, session_id: str, **kwargs):
             try:
+                from curve_memory.core.config import load_config
+                self._cfg = load_config()
+            except Exception:
+                self._cfg = {"embedding": {}, "search": {}, "tier": {}}
+
+            try:
                 from curve_memory.core.embedding_provider import create_embedding_provider
-                self._embedder = create_embedding_provider()
+                self._embedder = create_embedding_provider(self._cfg.get("embedding", {}))
             except Exception:
                 self._embedder = None
             try:
@@ -105,6 +111,9 @@ try:
                 self._searcher = HybridSearch(
                     Path.home() / ".hermes" / "memories",
                     embedder=self._embedder,
+                    alpha=self._cfg.get("search", {}).get("alpha", 0.35),
+                    beta=self._cfg.get("search", {}).get("beta", 0.45),
+                    gamma=self._cfg.get("search", {}).get("gamma", 0.20),
                 )
             except Exception:
                 self._searcher = None
