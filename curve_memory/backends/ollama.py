@@ -25,15 +25,17 @@ class OllamaBackend(EmbeddingProvider):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read().decode())
 
     def embed(self, text: str) -> List[float]:
-        result = self._request("embeddings", {
+        # 使用新版 /api/embed 端点（Ollama 0.24+）
+        result = self._request("embed", {
             "model": self.model,
-            "prompt": text,
+            "input": text,
         })
-        return result.get("embedding", [])
+        embeddings = result.get("embeddings", [])
+        return embeddings[0] if embeddings else []
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         return [self.embed(t) for t in texts]
