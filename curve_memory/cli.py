@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-curve-memory-cli — 遗忘曲线记忆系统 CLI
+hermes curve-memory — 遗忘曲线记忆系统 CLI
 
 用法：
-  curve-memory-cli search <query>        三路检索
-  curve-memory-cli index --rebuild       全量重建索引
-  curve-memory-cli index --incremental   增量更新索引
-  curve-memory-cli status                状态查看
-  curve-memory-cli touch <topic>         置 t=0
-  curve-memory-cli daily-tick            手动触发衰减
-  curve-memory-cli forget <topic>        手动归档
-  curve-memory-cli mature <topic>        手动标记成熟
-  curve-memory-cli check                 健康检查
+  hermes curve-memory search <query>        三路检索
+  hermes curve-memory index --rebuild       全量重建索引
+  hermes curve-memory index --incremental   增量更新索引
+  hermes curve-memory status                状态查看
+  hermes curve-memory touch <topic>         置 t=0
+  hermes curve-memory daily-tick            手动触发衰减
+  hermes curve-memory forget <topic>        手动归档
+  hermes curve-memory mature <topic>        手动标记成熟
+  hermes curve-memory check                 健康检查
 """
 
 import argparse
@@ -328,7 +328,7 @@ def cmd_setup(args):
         print("     稍后可手动运行: hermes curve-memory config --interactive")
 
     print("\n✅ Setup complete.")
-    print("   下一步: hermes config set memory.plugin curve-memory")
+    print("   下一步: hermes config set memory.provider curve-memory")
     print("           hermes gateway restart")
 
 
@@ -384,13 +384,13 @@ def cmd_uninstall(args):
         cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
         print(f"  ✅ Removed {before - after} cron job(s)")
 
-    # 3. 清理 memory.plugin 配置
+    # 3. 清理 memory.provider 配置
     try:
-        subprocess.run(["hermes", "config", "unset", "memory.plugin"],
+        subprocess.run(["hermes", "config", "unset", "memory.provider"],
                        capture_output=True, timeout=10)
-        print("  ✅ Cleared memory.plugin config")
+        print("  ✅ Cleared memory.provider config")
     except Exception:
-        print("  ⚠️  Run manually: hermes config unset memory.plugin")
+        print("  ⚠️  Run manually: hermes config unset memory.provider")
 
     # 4. 清除数据（仅 --all 时）
     if args.all:
@@ -500,7 +500,7 @@ def cmd_repair(args):
         if lock_path.exists():
             lock_path.unlink()
         if found_issues > 0:
-            print(f"   建议运行: curve-memory index --rebuild")
+            print(f"   建议运行: hermes curve-memory index --rebuild")
 
     if found_issues == 0:
         print("\n✅ 一切正常")
@@ -531,7 +531,7 @@ def cmd_recover(args):
 
     if not args.topic:
         print(f"可用主题: {', '.join(sorted(set(t for t,_,_ in candidates)))}")
-        print("使用: curve-memory recover <topic>")
+        print("使用: hermes curve-memory recover <topic>")
         return
 
     # 查找主题
@@ -548,7 +548,7 @@ def cmd_recover(args):
         shutil.copy2(str(src_path), str(dst_path))
         print(f"✅ 已从 archive/{kind}/ 恢复: {topic}")
 
-    print("ℹ️  需手动添加索引: curve-memory index --rebuild")
+    print("ℹ️  需手动添加索引: hermes curve-memory index --rebuild")
 
 
 def cmd_config(args):
@@ -669,29 +669,29 @@ def _interactive_config():
 
 
 def cmd_deactivate(args):
-    """停用：重设 memory.plugin，保留数据"""
+    """停用：重设 memory.provider，保留数据"""
     import subprocess
     try:
-        subprocess.run(["hermes", "config", "unset", "memory.plugin"],
+        subprocess.run(["hermes", "config", "unset", "memory.provider"],
                        capture_output=True, timeout=10)
         print("✅ curve-memory 已停用（数据已保留）")
         print("   启用: hermes curve-memory activate")
     except Exception as e:
         print(f"⚠️  {e}")
-        print("   手动: hermes config unset memory.plugin")
+        print("   手动: hermes config unset memory.provider")
 
 
 def cmd_activate(args):
     """重新激活"""
     import subprocess
     try:
-        subprocess.run(["hermes", "config", "set", "memory.plugin", "curve-memory"],
+        subprocess.run(["hermes", "config", "set", "memory.provider", "curve-memory"],
                        capture_output=True, timeout=10)
         print("✅ curve-memory 已启用")
         print("   重启: hermes gateway restart")
     except Exception as e:
         print(f"⚠️  {e}")
-        print("   手动: hermes config set memory.plugin curve-memory")
+        print("   手动: hermes config set memory.provider curve-memory")
 
 
 def cmd_undo(args):
@@ -871,21 +871,21 @@ def cmd_install_wizard(args):
                 new.append(jname)
         if new:
             print(f"{warn} 需手动注册: {', '.join(new)}")
-            print(f"   运行: curve-memory setup")
+            print(f"   运行: hermes curve-memory setup")
         else:
             print(f"{ok} 已注册")
     else:
         print(f"{warn} cron 系统未就绪")
 
     # 6. 配置检查
-    print("6️⃣ 检查 memory.plugin 配置... ", end="", flush=True)
+    print("6️⃣ 检查 memory.provider 配置... ", end="", flush=True)
     config_path = Path.home() / ".hermes" / "config.yaml"
     if config_path.exists():
         raw = config_path.read_text()
-        if "memory.plugin" in raw or "memory:" in raw:
+        if "memory.provider" in raw or "memory:" in raw:
             print(f"{ok}")
         else:
-            print(f"{warn} 未设置 → hermes config set memory.plugin curve-memory")
+            print(f"{warn} 未设置 → hermes config set memory.provider curve-memory")
 
     # 7. 索引检查
     print("7️⃣ 检查索引状态... ", end="", flush=True)
@@ -893,9 +893,18 @@ def cmd_install_wizard(args):
     if emb_dir.exists() and any(emb_dir.iterdir()):
         print(f"{ok} 有 {len(list(emb_dir.glob('*.jsonl')))} 个嵌入文件")
     else:
-        print(f"{warn} 索引为空 → curve-memory index --rebuild")
+        print(f"{warn} 索引为空 → hermes curve-memory index --rebuild")
 
     print("\n✅ 检查完成。按上述 ⚠️ 提示操作即可。")
+
+
+def register_cli(subparser) -> None:
+    """Called by Hermes memory provider CLI discovery during argparse setup.
+
+    Creates the ``hermes curve-memory`` subcommand tree.
+    """
+    subs = subparser.add_subparsers(dest="curve_memory_command")
+    register_subcommands(subs)
 
 
 def register_subcommands(sub):

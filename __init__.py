@@ -7,7 +7,7 @@ Curve-memory plugin — 遗忘曲线记忆系统
 安装：hermes plugins install https://github.com/sin1111yi/curve-memory.git
 初始化：hermes curve-memory setup
 配置：hermes curve-memory config --interactive
-启用：hermes config set memory.plugin curve-memory && hermes gateway restart
+启用：hermes config set memory.provider curve-memory && hermes gateway restart
 """
 
 from __future__ import annotations
@@ -28,32 +28,6 @@ if str(_PLUGIN_DIR) not in sys.path:
 
 # 暴露 MemoryProvider 子类供发现系统使用
 from curve_memory.provider import CurveMemoryProvider
-
-
-def register(ctx):
-    """Plugin-style registration — called by Hermes plugin system.
-    Registers CLI subcommand `curve-memory` under `hermes`.
-    """
-    def setup_fn(subparser):
-        """Add all curve-memory subcommands as hermes curve-memory <sub>."""
-        from curve_memory.cli import register_subcommands
-        register_subcommands(subparser)
-
-    def cli_handler(args):
-        """Delegate to curve-memory CLI main()."""
-        if hasattr(args, 'func') and args.func:
-            args.func(args)
-        else:
-            from curve_memory.cli import main as curve_main
-            curve_main()
-
-    ctx.register_cli_command(
-        name="curve-memory",
-        help="遗忘曲线记忆系统 — 基于 R(t) 遗忘曲线的记忆管理",
-        setup_fn=setup_fn,
-        handler_fn=cli_handler,
-    )
-    logger.info("Curve-memory CLI registered: hermes curve-memory")
 
 
 def get_provider():

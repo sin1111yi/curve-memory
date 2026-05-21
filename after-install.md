@@ -31,7 +31,7 @@ This walks you through:
 ## 3. Enable memory plugin
 
 ```bash
-hermes config set memory.plugin curve-memory
+hermes config set memory.provider curve-memory
 hermes gateway restart
 ```
 
@@ -56,6 +56,6 @@ hermes curve-memory search "test"
 | `Ollama connection refused` | Ollama not running | `ollama serve` or check Ollama installation |
 | `index --rebuild` fails | Embedding model not found | `ollama pull qwen3-embedding:8b` |
 | Search returns 0 results | Index not built | `hermes curve-memory index --rebuild` |
-| `memory.plugin` not working | Config not set | `hermes config set memory.plugin curve-memory && hermes gateway restart` |
+| `memory.provider` not working | Config not set | `hermes config set memory.provider curve-memory && hermes gateway restart` |
 | `prefetch` returns 0 chars | Search working but no relevant memories | Search still works — add more memories via `memory add` |
 | Response is slow | qwen3-embedding:8b takes ~40ms per chunk | Normal for first-time embedding; subsequent searches are cached |
