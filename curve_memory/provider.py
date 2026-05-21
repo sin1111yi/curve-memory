@@ -27,6 +27,7 @@ from curve_memory.core.embedding import create_embedding_provider
 from curve_memory.core.search import HybridSearch
 from curve_memory.core.activity import parse_activity, format_activity, load_activity
 from curve_memory.core.tier import forgetting_curve, r_to_tier_name
+from curve_memory.enrichment import degradation_sweep, detect_tier_drops, degrade_memory
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,40 @@ TOOL_SCHEMAS = [
                 },
             },
             "required": ["key"],
+        },
+    },
+    {
+        "name": "curve_memory_enrich",
+        "description": (
+            "Append new information to an existing memory topic. "
+            "Use this when conversation reveals new facts about a known topic. "
+            "The topic must already exist in active memories. "
+            "New content is appended with a timestamped enriched section."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The memory topic name (filename without .md)",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "New information to add. Should be concise, factual, in markdown format.",
+                },
+            },
+            "required": ["topic", "content"],
+        },
+    },
+    {
+        "name": "curve_memory_degrade_now",
+        "description": (
+            "Force-degrade all active memories whose content exceeds their TIER's target size. "
+            "Called proactively by the agent or automatically during sync_turn()."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
         },
     },
 ]
@@ -194,6 +229,14 @@ class CurveMemoryProvider(MemoryProvider):
 
         # 惰性归档
         self._archive_sweep()
+
+        # Run degradation sweep after archive sweep
+        try:
+            degraded = degradation_sweep(self._memories_dir)
+            if degraded:
+                logger.debug("Degradation sweep: %d memories condensed", len(degraded))
+        except Exception as e:
+            logger.debug("Degradation sweep error: %s", e)
 
         # 清理旧的 cron 任务
         self._cleanup_old_cron()
@@ -315,6 +358,8 @@ class CurveMemoryProvider(MemoryProvider):
                     t_days = (now - raw_t) / 86400
                 else:
                     t_days = raw_t
+                # Condense to TIER_1 before archiving
+                degrade_memory(topic, self._memories_dir)
                 if t_days >= archive_days:
                     if info.get("mature", False):
                         self._mature_archive(topic, info, data)
@@ -435,6 +480,15 @@ class CurveMemoryProvider(MemoryProvider):
             _touch_memory(topic, self._memories_dir)
         self._touched_topics.clear()
 
+        # Check TIER drops for mentioned topics
+        try:
+            drops = detect_tier_drops(self._memories_dir)
+            for topic, old_tier, new_tier in drops:
+                if new_tier < old_tier:
+                    degrade_memory(topic, self._memories_dir)
+        except Exception as e:
+            logger.debug("Tier drop detection error: %s", e)
+
     # ── Tools ───────────────────────────────────────────────────────
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
@@ -482,6 +536,20 @@ class CurveMemoryProvider(MemoryProvider):
                 self._save_user_profile()
                 return json.dumps({"status": "deleted", "key": key})
             return json.dumps({"error": f"Key '{key}' not found"})
+
+        if tool_name == "curve_memory_enrich":
+            topic = str(args.get("topic", "")).strip()
+            content = str(args.get("content", "")).strip()
+            if not topic or not content:
+                return json.dumps({"error": "Both 'topic' and 'content' are required"})
+            from curve_memory.enrichment import enrich_memory
+            ok = enrich_memory(topic, content, self._memories_dir)
+            return json.dumps({"status": "ok" if ok else "skipped", "topic": topic})
+
+        if tool_name == "curve_memory_degrade_now":
+            from curve_memory.enrichment import degradation_sweep
+            degraded = degradation_sweep(self._memories_dir)
+            return json.dumps({"status": "ok", "degraded": len(degraded), "topics": degraded})
 
         raise NotImplementedError(f"Unknown tool: {tool_name}")
 
