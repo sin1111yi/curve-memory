@@ -75,16 +75,15 @@ def cmd_search(args):
 def cmd_index(args):
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "indexer", os.path.join(os.path.dirname(__file__), "curve-memory-indexer.py"))
+        "indexer", os.path.join(os.path.dirname(__file__), "core", "indexer.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    # 直接调用 indexer 主函数
     sys.argv = ["curve-memory-indexer"]
     if args.rebuild:
         sys.argv.append("--rebuild")
     else:
         sys.argv.append("--incremental")
-    indexer_main()
+    mod.main()
 
 
 def cmd_status(args):
@@ -159,7 +158,7 @@ def cmd_touch(args):
 def cmd_daily_tick(args):
     import importlib.util, sys
     spec = importlib.util.spec_from_file_location(
-        "forgetting", os.path.join(os.path.dirname(__file__), "curve-memory-forgetting.py"))
+        "forgetting", os.path.join(os.path.dirname(__file__), "core", "forgetting.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.main()
@@ -169,11 +168,11 @@ def cmd_forget(args):
     from activity import parse_activity, format_activity
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "forgetting", os.path.join(os.path.dirname(__file__), "curve-memory-forgetting.py"))
+        "forgetting", os.path.join(os.path.dirname(__file__), "core", "forgetting.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     forget_archive = mod.forget_archive
-    from tier import forgetting_curve
+    from curve_memory.core.tier import forgetting_curve
     raw = (MEMORIES_DIR / "ACTIVITY.yaml").read_text(encoding="utf-8")
     data = parse_activity(raw)
 
