@@ -2,10 +2,10 @@
 CurveMemoryProvider — 完整的 Hermes MemoryProvider 实现
 
 生命周期：
-  initialize() → 创建资源，加载配置和嵌入引擎
-  prefetch()   → 每轮对话前召回记忆
+  initialize() → 创建资源，加载配置、嵌入引擎、用户画像
+  prefetch()   → 每轮对话前召回记忆 + 用户画像
   sync_turn()  → 每轮对话后更新活性
-  get_tool_schemas() / handle_tool_call() → 暴露搜索工具
+  get_tool_schemas() / handle_tool_call() → 搜索 + 用户画像工具
   get_config_schema() / save_config() → hermes memory setup 支持
   on_session_end() → 惰性归档
   shutdown()   → 清理
@@ -30,7 +30,8 @@ from curve_memory.core.tier import forgetting_curve, r_to_tier_name
 
 logger = logging.getLogger(__name__)
 
-# 工具 schema
+# ── Tool schemas ─────────────────────────────────────────────────────
+
 TOOL_SCHEMAS = [
     {
         "name": "curve_memory_search",
@@ -55,8 +56,50 @@ TOOL_SCHEMAS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "curve_memory_user_get",
+        "description": "Get all stored user profile entries. Returns key-value pairs the agent knows about the user.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "curve_memory_user_set",
+        "description": "Store a fact about the user in the user profile. Use this to remember user preferences, personal details, communication style, and other user-specific information that persists across sessions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "A short key name (e.g. 'preferred_language', 'timezone', 'likes')",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The value to store",
+                },
+            },
+            "required": ["key", "value"],
+        },
+    },
+    {
+        "name": "curve_memory_user_delete",
+        "description": "Remove a fact from the user profile.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key to remove from user profile",
+                },
+            },
+            "required": ["key"],
+        },
+    },
 ]
 
+
+# ── Helpers ──────────────────────────────────────────────────────────
 
 def _touch_memory(topic: str, memories_dir: Path):
     """更新记忆的访问时间为当前 Unix 时间戳"""
@@ -88,6 +131,8 @@ def _extract_mentioned_topics(text: str, memories_dir: Path) -> list:
     return list(topics)
 
 
+# ── Provider ─────────────────────────────────────────────────────────
+
 class CurveMemoryProvider(MemoryProvider):
     """遗忘曲线记忆系统 — 基于 R(t) 遗忘曲线的 MemoryProvider"""
 
@@ -101,20 +146,28 @@ class CurveMemoryProvider(MemoryProvider):
         self._searcher = None
         self._touched_topics: set = set()
 
+        # 用户画像
+        self._user_profile: Dict[str, str] = {}
+        self._user_profile_path: Optional[Path] = None
+
     # ── Core lifecycle ──────────────────────────────────────────────
 
     def is_available(self) -> bool:
-        """本地插件始终可用（只要有配置路径）"""
-        return True  # 不进行网络调用
+        """本地插件始终可用"""
+        return True
 
     def initialize(self, session_id: str, **kwargs):
-        """初始化嵌入引擎、搜索器，执行惰性归档和旧数据迁移"""
+        """初始化嵌入引擎、搜索器、用户画像"""
         hermes_home = kwargs.get("hermes_home", str(Path.home() / ".hermes"))
         self._base = Path(hermes_home)
         self._memories_dir = self._base / "memories"
 
         # 加载配置
         self._cfg = load_config(hermes_home)
+
+        # 加载用户画像
+        self._user_profile_path = self._base / "user-profile.json"
+        self._load_user_profile()
 
         # 初始化嵌入器
         try:
@@ -136,7 +189,7 @@ class CurveMemoryProvider(MemoryProvider):
             logger.debug("Searcher init failed: %s", e)
             self._searcher = None
 
-        # 迁移旧格式 t 值（day-counter → Unix timestamp）
+        # 迁移旧格式 t 值
         self._migrate_t_values()
 
         # 惰性归档
@@ -146,8 +199,33 @@ class CurveMemoryProvider(MemoryProvider):
         self._cleanup_old_cron()
 
         self._touched_topics = set()
-        logger.debug("CurveMemory init (deg=%s)",
-                     getattr(self._searcher, 'degrade_level', 'N/A'))
+        logger.debug("CurveMemory init (deg=%s, user_profile=%d entries)",
+                     getattr(self._searcher, 'degrade_level', 'N/A'),
+                     len(self._user_profile))
+
+    # ── User profile ────────────────────────────────────────────────
+
+    def _load_user_profile(self):
+        """从磁盘加载用户画像"""
+        if self._user_profile_path and self._user_profile_path.exists():
+            try:
+                self._user_profile = json.loads(self._user_profile_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.debug("User profile load error: %s", e)
+                self._user_profile = {}
+        else:
+            self._user_profile = {}
+
+    def _save_user_profile(self):
+        """持久化用户画像到磁盘"""
+        if self._user_profile_path:
+            self._user_profile_path.parent.mkdir(parents=True, exist_ok=True)
+            self._user_profile_path.write_text(
+                json.dumps(self._user_profile, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+    # ── Migration / cleanup ─────────────────────────────────────────
 
     def _migrate_t_values(self):
         """将旧格式的 t 值（day-counter）迁移为 Unix 时间戳"""
@@ -162,7 +240,6 @@ class CurveMemoryProvider(MemoryProvider):
             now = int(time.time())
             for topic, info in memories.items():
                 raw_t = info.get("t", 0)
-                # 旧格式: t < 1e12 是 day-counter
                 if isinstance(raw_t, (int, float)) and 0 < raw_t < 1000000000000:
                     info["t"] = now - raw_t * 86400
                     changed = True
@@ -175,15 +252,12 @@ class CurveMemoryProvider(MemoryProvider):
     def _cleanup_old_cron(self):
         """清理旧的 cron 任务和脚本"""
         try:
-            # 删除旧脚本
             scripts_dir = self._base / "scripts"
             for name in ["curve-memory-forgetting.py", "curve-memory-indexer.py"]:
                 p = scripts_dir / name
                 if p.exists():
                     p.unlink()
                     logger.debug("Removed old script: %s", name)
-
-            # 删除旧 cron 任务
             cron_file = self._base / "cron" / "jobs.json"
             if cron_file.exists():
                 data = json.loads(cron_file.read_text())
@@ -200,6 +274,8 @@ class CurveMemoryProvider(MemoryProvider):
         except Exception as e:
             logger.debug("Cron cleanup error: %s", e)
 
+    # ── Archive ─────────────────────────────────────────────────────
+
     def _archive_sweep(self):
         """惰性归档：扫描所有记忆，归档超过阈值的"""
         try:
@@ -211,11 +287,9 @@ class CurveMemoryProvider(MemoryProvider):
             memories = data.get("memories", {})
             if not memories:
                 return
-
             archive_days = self._cfg.get("tier", {}).get("archive_threshold_days", 30)
             now = time.time()
             changed = False
-
             to_remove = []
             for topic, info in list(memories.items()):
                 raw_t = info.get("t", 0)
@@ -223,16 +297,13 @@ class CurveMemoryProvider(MemoryProvider):
                     t_days = (now - raw_t) / 86400
                 else:
                     t_days = raw_t
-
                 if t_days >= archive_days:
-                    r = forgetting_curve(t_days)
                     if info.get("mature", False):
                         self._mature_archive(topic, info, data)
                     else:
                         self._forget_archive(topic, info, data)
                     to_remove.append(topic)
                     changed = True
-
             if changed:
                 activity_path.write_text(format_activity(data), encoding="utf-8")
                 logger.debug("Archive sweep: archived %d topics", len(to_remove))
@@ -240,20 +311,17 @@ class CurveMemoryProvider(MemoryProvider):
             logger.debug("Archive sweep error: %s", e)
 
     def _forget_archive(self, topic: str, info: dict, data: dict):
-        """遗忘归档：移到 archive/forgotten/"""
         import shutil
         src = self._memories_dir / "active" / f"{topic}.md"
         dst = self._memories_dir / "archive" / "forgotten" / f"{topic}.md"
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.exists():
             shutil.move(str(src), str(dst))
-        # 从 ACTIVITY.yaml 删除
         if topic in data.get("memories", {}):
             del data["memories"][topic]
         logger.debug("Forgotten archive: %s", topic)
 
     def _mature_archive(self, topic: str, info: dict, data: dict):
-        """成熟归档：复制到 archive/mature/"""
         import shutil
         from datetime import datetime
         src = self._memories_dir / "active" / f"{topic}.md"
@@ -261,7 +329,6 @@ class CurveMemoryProvider(MemoryProvider):
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.exists():
             shutil.copy(str(src), str(dst))
-        # 创建 knowledge 文档
         knowledge_dir = self._base / "knowledge"
         knowledge_dir.mkdir(parents=True, exist_ok=True)
         knowledge_path = knowledge_dir / f"{topic}.md"
@@ -280,10 +347,8 @@ class CurveMemoryProvider(MemoryProvider):
 {original}
 """
         knowledge_path.write_text(knowledge_content, encoding="utf-8")
-        # 删除 active/
         if src.exists():
             src.unlink()
-        # 从 ACTIVITY.yaml 删除
         if topic in data.get("memories", {}):
             del data["memories"][topic]
         logger.debug("Mature archive: %s", topic)
@@ -300,34 +365,46 @@ class CurveMemoryProvider(MemoryProvider):
     # ── System prompt ───────────────────────────────────────────────
 
     def system_prompt_block(self) -> str:
-        return (
+        lines = [
             "You have access to a memory system via curve_memory_search tool. "
             "Retrieved memories show a TIER level: TIER_5 (recent, ≤1d), "
             "TIER_4 (≤3d), TIER_3 (≤7d), TIER_2 (≤14d), ARCHIVE (≥30d)."
-        )
+        ]
+        if self._user_profile:
+            entries = "\n".join(f"  {k}: {v}" for k, v in self._user_profile.items())
+            lines.append(f"\n## User Profile\n{entries}")
+        return "\n".join(lines)
 
-    # ── Prefetch (context injection) ────────────────────────────────
+    # ── Prefetch ────────────────────────────────────────────────────
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """每轮对话前召回相关记忆"""
-        if not self._searcher or not query.strip():
-            return ""
+        """每轮对话前召回相关记忆 + 用户画像"""
+        parts = []
 
-        try:
-            results = self._searcher.search(query, top_k=3)
-            if not results:
-                return ""
+        # 记忆召回
+        if self._searcher and query.strip():
+            try:
+                results = self._searcher.search(query, top_k=3)
+                if results:
+                    blocks = []
+                    for topic, score, snippet, r in results:
+                        tier = r_to_tier_name(r)
+                        blocks.append(f"### {topic} ({tier})\n{snippet}")
+                        self._touched_topics.add(topic)
+                    parts.append("## Retrieved Memories\n\n" + "\n\n".join(blocks))
+            except Exception as e:
+                logger.debug("prefetch error: %s", e)
 
-            blocks = []
-            for topic, score, snippet, r in results:
-                tier = r_to_tier_name(r)
-                blocks.append(f"### {topic} ({tier})\n{snippet}")
-                self._touched_topics.add(topic)
+        # 用户画像（当查询匹配到画像关键词时注入）
+        if self._user_profile and query.strip():
+            q_lower = query.lower()
+            matched = {k: v for k, v in self._user_profile.items()
+                       if k.lower() in q_lower or any(w in q_lower for w in v.lower().split())}
+            if matched:
+                entries = "\n".join(f"  {k}: {v}" for k, v in matched.items())
+                parts.append("## User Profile (matched)\n" + entries)
 
-            return "\n\n## Retrieved Memories\n\n" + "\n\n".join(blocks)
-        except Exception as e:
-            logger.debug("prefetch error: %s", e)
-            return ""
+        return "\n\n".join(parts)
 
     # ── Sync turn ───────────────────────────────────────────────────
 
@@ -369,6 +446,26 @@ class CurveMemoryProvider(MemoryProvider):
             except Exception as e:
                 return json.dumps({"error": str(e)})
 
+        if tool_name == "curve_memory_user_get":
+            return json.dumps({"profile": dict(self._user_profile)})
+
+        if tool_name == "curve_memory_user_set":
+            key = str(args.get("key", "")).strip()
+            value = str(args.get("value", "")).strip()
+            if not key:
+                return json.dumps({"error": "Key is required"})
+            self._user_profile[key] = value
+            self._save_user_profile()
+            return json.dumps({"status": "ok", "key": key, "value": value})
+
+        if tool_name == "curve_memory_user_delete":
+            key = str(args.get("key", "")).strip()
+            if key in self._user_profile:
+                del self._user_profile[key]
+                self._save_user_profile()
+                return json.dumps({"status": "deleted", "key": key})
+            return json.dumps({"error": f"Key '{key}' not found"})
+
         raise NotImplementedError(f"Unknown tool: {tool_name}")
 
     # ── Session end ─────────────────────────────────────────────────
@@ -380,6 +477,7 @@ class CurveMemoryProvider(MemoryProvider):
     # ── Shutdown ────────────────────────────────────────────────────
 
     def shutdown(self):
+        self._save_user_profile()
         self._searcher = None
         self._embedder = None
         self._cfg = {}
