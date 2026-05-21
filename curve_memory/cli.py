@@ -18,7 +18,6 @@ from curve_memory.core.embedding import create_embedding_provider
 from curve_memory.core.search import HybridSearch
 from curve_memory.core.activity import parse_activity, format_activity, load_activity
 from curve_memory.core.tier import forgetting_curve, r_to_tier_name
-from curve_memory.core.chunker import chunk_tier_summary, chunk_file
 
 logger = logging.getLogger(__name__)
 
@@ -305,8 +304,19 @@ def cmd_index(args):
         r = forgetting_curve(t_days)
         tier_level = __import__("curve_memory.core.tier", fromlist=["r_to_tier_level"]).r_to_tier_level(r)
 
-        # 分块
-        chunks = chunk_tier_summary(topic, content, tier_level)
+        # 按 TIER 级别分块
+        lines = content.splitlines()
+        max_chars = {5: 2000, 4: 1000, 3: 500, 2: 300, 1: 100}.get(tier_level, 100)
+        chunks = []
+        for i in range(0, len(lines), max(1, max_chars // 80)):
+            block = "\n".join(lines[i:i + max(1, max_chars // 80)])
+            chunks.append({
+                "seq": len(chunks),
+                "text": block[:max_chars],
+                "tier": tier_level,
+            })
+        if not chunks:
+            chunks.append({"seq": 0, "text": content[:max_chars], "tier": tier_level})
 
         # Embedding
         if embedder:

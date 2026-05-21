@@ -8,4 +8,13 @@ in ``curve_memory/cli.py``, so this shim re-exports it.
 See: plugins/memory/__init__.py :: discover_plugin_cli_commands()
 """
 
+import sys
+from pathlib import Path
+
+# Required: when imported via spec_from_file_location by Hermes'
+# discover_plugin_cli_commands(), the plugin dir is NOT on sys.path.
+_plugin_dir = str(Path(__file__).resolve().parent)
+if _plugin_dir not in sys.path:
+    sys.path.insert(0, _plugin_dir)
+
 from curve_memory.cli import register_cli
