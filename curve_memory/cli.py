@@ -2,55 +2,62 @@
 """
 hermes curve-memory — 遗忘曲线记忆系统 CLI
 
-用法：
-  hermes curve-memory search <query>        三路检索
-  hermes curve-memory index --rebuild       全量重建索引
-  hermes curve-memory index --incremental   增量更新索引
-  hermes curve-memory status                状态查看
-  hermes curve-memory touch <topic>         置 t=0
-  hermes curve-memory daily-tick            手动触发衰减
-  hermes curve-memory forget <topic>        手动归档
-  hermes curve-memory mature <topic>        手动标记成熟
-  hermes curve-memory check                 健康检查
+7 subcommands: search, status, config, check, activate, deactivate, index
 """
 
 import argparse
 import json
-import os
-import sys
+import logging
+import subprocess
+import time
 from pathlib import Path
+from typing import Any
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# 插件路径兼容
-_PLUGIN_PARENT = Path(__file__).resolve().parent.parent  # plugins/curve-memory/
-if str(_PLUGIN_PARENT) not in sys.path:
-    sys.path.insert(0, str(_PLUGIN_PARENT))
-_PLUGIN_CORE = Path.home() / ".hermes" / "plugins" / "curve-memory"
-if _PLUGIN_CORE.exists() and str(_PLUGIN_CORE) not in sys.path:
-    sys.path.insert(0, str(_PLUGIN_CORE))
+from curve_memory.core.config import load_config, save_config, get_config_schema, schema_values_to_config, format_config
+from curve_memory.core.embedding import create_embedding_provider
+from curve_memory.core.search import HybridSearch
+from curve_memory.core.activity import parse_activity, format_activity, load_activity
+from curve_memory.core.tier import forgetting_curve, r_to_tier_name
+from curve_memory.core.chunker import chunk_tier_summary, chunk_file
 
-try:
-    from tier import forgetting_curve, r_to_tier_name
-    from activity import parse_activity, format_activity
-except ModuleNotFoundError:
-    from curve_memory.core.tier import forgetting_curve, r_to_tier_name
-    from curve_memory.core.activity import parse_activity, format_activity
+logger = logging.getLogger(__name__)
 
-MEMORIES_DIR = Path.home() / ".hermes" / "memories"
 
+# ── Helpers ──────────────────────────────────────────────────────────
+
+def _get_hermes_home() -> Path:
+    """获取 hermes_home 路径"""
+    return Path.home() / ".hermes"
+
+
+def _get_memories_dir() -> Path:
+    return _get_hermes_home() / "memories"
+
+
+def _get_embedder():
+    cfg = load_config(str(_get_hermes_home()))
+    return create_embedding_provider(cfg.get("embedding", {}))
+
+
+def _get_searcher(embedder=None):
+    cfg = load_config(str(_get_hermes_home()))
+    if embedder is None:
+        embedder = _get_embedder()
+    return HybridSearch(
+        _get_memories_dir(),
+        embedder=embedder,
+        alpha=cfg.get("search", {}).get("alpha", 0.35),
+        beta=cfg.get("search", {}).get("beta", 0.45),
+        gamma=cfg.get("search", {}).get("gamma", 0.20),
+    )
+
+
+# ── Commands ─────────────────────────────────────────────────────────
 
 def cmd_search(args):
-    from search import HybridSearch
-    from tier import r_to_tier_name
-
-    embedder = None
-    try:
-        from embedding_provider import create_embedding_provider
-        embedder = create_embedding_provider()
-    except Exception:
-        pass
-
-    searcher = HybridSearch(MEMORIES_DIR, embedder=embedder)
+    """三路混合检索"""
+    embedder = _get_embedder()
+    searcher = _get_searcher(embedder)
     results = searcher.search(args.query, top_k=args.top_k)
 
     if args.json:
@@ -72,49 +79,42 @@ def cmd_search(args):
             print()
 
 
-def cmd_index(args):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "indexer", os.path.join(os.path.dirname(__file__), "core", "indexer.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    sys.argv = ["curve-memory-indexer"]
-    if args.rebuild:
-        sys.argv.append("--rebuild")
-    else:
-        sys.argv.append("--incremental")
-    mod.main()
-
-
 def cmd_status(args):
+    """系统状态查看"""
+    memories_dir = _get_memories_dir()
     print("=== Curve Memory Status ===")
     print()
 
     # 记忆数量
-    active_files = list((MEMORIES_DIR / "active").glob("*.md"))
+    active_files = list((memories_dir / "active").glob("*.md"))
     print(f"📁 Active memories: {len(active_files)}")
 
     # 归档数量
-    forgotten = list((MEMORIES_DIR / "archive" / "forgotten").glob("*.md"))
-    mature = list((MEMORIES_DIR / "archive" / "mature").glob("*.md"))
+    forgotten = list((memories_dir / "archive" / "forgotten").glob("*.md"))
+    mature = list((memories_dir / "archive" / "mature").glob("*.md"))
     print(f"📦 Archived (forgotten): {len(forgotten)}")
     print(f"🎓 Archived (mature): {len(mature)}")
 
     # Knowledge
-    knowledge = list((Path.home() / ".hermes" / "knowledge").glob("*.md"))
+    knowledge_dir = _get_hermes_home() / "knowledge"
+    knowledge = list(knowledge_dir.glob("*.md")) if knowledge_dir.exists() else []
     print(f"📚 Knowledge docs: {len(knowledge)}")
 
     # TIER 分布
-
-    activity_file = MEMORIES_DIR / "ACTIVITY.yaml"
+    activity_file = memories_dir / "ACTIVITY.yaml"
     if activity_file.exists():
         raw = activity_file.read_text(encoding="utf-8")
         data = parse_activity(raw)
         memories = data.get("memories", {})
         tier_dist = {}
+        now = time.time()
         for topic, info in memories.items():
-            t = info.get("t", 0)
-            r = forgetting_curve(t)
+            raw_t = info.get("t", 0)
+            if isinstance(raw_t, (int, float)) and raw_t > 1000000000000:
+                t_days = (now - raw_t) / 86400
+            else:
+                t_days = raw_t
+            r = forgetting_curve(t_days)
             tier = r_to_tier_name(r)
             tier_dist[tier] = tier_dist.get(tier, 0) + 1
 
@@ -126,88 +126,67 @@ def cmd_status(args):
             print(f"  {tier:15s}: {count:2d} {bar}")
 
     # 索引状态
-    embedding_dir = MEMORIES_DIR / ".embedding_index"
-    fts5_path = MEMORIES_DIR / ".fts5" / "curve_memory_fts5.db"
+    embedding_dir = memories_dir / ".embedding_index"
+    fts5_path = memories_dir / ".fts5" / "curve_memory_fts5.db"
     print(f"\n🔎 Embedding index: {'✅' if embedding_dir.exists() and any(embedding_dir.iterdir()) else '❌'}")
     print(f"🔎 FTS5 index: {'✅' if fts5_path.exists() else '❌'}")
 
     # Embedder
-    try:
-        from embedding_provider import create_embedding_provider
-        emb = create_embedding_provider()
-        print(f"🤖 Embedder: {emb.name if emb else 'None (degraded)'}")
-    except Exception:
+    embedder = _get_embedder()
+    if embedder:
+        print(f"🤖 Embedder: {embedder.name} ✅")
+    else:
         print("🤖 Embedder: None (degraded)")
 
 
-def cmd_touch(args):
-    from activity import parse_activity, format_activity
-    raw = (MEMORIES_DIR / "ACTIVITY.yaml").read_text(encoding="utf-8")
-    data = parse_activity(raw)
-    memories = data.get("memories", {})
-
-    if args.topic in memories:
-        memories[args.topic]["t"] = 0
-        memories[args.topic]["access_count"] = memories[args.topic].get("access_count", 0) + 1
-        (MEMORIES_DIR / "ACTIVITY.yaml").write_text(format_activity(data), encoding="utf-8")
-        print(f"✅ {args.topic}: t=0, access_count={memories[args.topic]['access_count']}")
-    else:
-        print(f"❌ Topic '{args.topic}' not found in ACTIVITY.yaml")
+def cmd_config(args):
+    """配置查看 / 交互式配置"""
+    if args.interactive:
+        _interactive_config()
+        return
+    try:
+        cfg = load_config(str(_get_hermes_home()))
+        print(format_config(cfg))
+    except Exception as e:
+        print(f"加载配置失败: {e}")
 
 
-def cmd_daily_tick(args):
-    import importlib.util, sys
-    spec = importlib.util.spec_from_file_location(
-        "forgetting", os.path.join(os.path.dirname(__file__), "core", "forgetting.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.main()
-
-
-def cmd_forget(args):
-    from activity import parse_activity, format_activity
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "forgetting", os.path.join(os.path.dirname(__file__), "core", "forgetting.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    forget_archive = mod.forget_archive
-    from curve_memory.core.tier import forgetting_curve
-    raw = (MEMORIES_DIR / "ACTIVITY.yaml").read_text(encoding="utf-8")
-    data = parse_activity(raw)
-
-    if args.topic in data.get("memories", {}):
-        info = data["memories"][args.topic]
-        t = info.get("t", 0)
-        r = forgetting_curve(t)
-        forget_archive(args.topic, t, r, data)
-        (MEMORIES_DIR / "ACTIVITY.yaml").write_text(format_activity(data), encoding="utf-8")
-        print(f"✅ {args.topic}: forgotten archived")
-    else:
-        print(f"❌ Topic '{args.topic}' not found")
-
-
-def cmd_mature(args):
-    from activity import parse_activity, format_activity
-    raw = (MEMORIES_DIR / "ACTIVITY.yaml").read_text(encoding="utf-8")
-    data = parse_activity(raw)
-
-    if args.topic in data.get("memories", {}):
-        data["memories"][args.topic]["mature"] = True
-        (MEMORIES_DIR / "ACTIVITY.yaml").write_text(format_activity(data), encoding="utf-8")
-        print(f"✅ {args.topic}: marked as mature")
-    else:
-        print(f"❌ Topic '{args.topic}' not found")
+def _interactive_config():
+    """交互式配置向导 — 写入 JSON 配置文件"""
+    schema = get_config_schema()
+    print("=== Curve Memory 配置向导 ===")
+    print("直接回车使用默认值。\n")
+    values = {}
+    for field in schema:
+        key = field["key"]
+        desc = field["description"]
+        default = field["default"]
+        try:
+            val = input(f"  {desc} [{default}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return
+        if val:
+            values[key] = val
+        else:
+            values[key] = default
+    cfg = schema_values_to_config(values)
+    save_config(cfg, str(_get_hermes_home()))
+    print("\n✅ 配置已保存到 curve-memory-config.json")
+    print("   查看: hermes curve-memory config")
+    print("   重启: hermes gateway restart")
 
 
 def cmd_check(args):
     """健康检查"""
+    memories_dir = _get_memories_dir()
+    hermes_home = _get_hermes_home()
     print("=== Curve Memory Health Check ===")
     print()
 
     # 1. ACTIVITY.yaml
-    activity_path = MEMORIES_DIR / "ACTIVITY.yaml"
-    print(f"[1/6] ACTIVITY.yaml: {'✅' if activity_path.exists() else '❌'}")
+    activity_path = memories_dir / "ACTIVITY.yaml"
+    print(f"[1/5] ACTIVITY.yaml: {'✅' if activity_path.exists() else '❌'}")
     if activity_path.exists():
         raw = activity_path.read_text(encoding="utf-8")
         if "metadata" in raw and "memories" in raw:
@@ -217,473 +196,29 @@ def cmd_check(args):
 
     # 2. 目录结构
     for d in ["active", "archive/forgotten", "archive/mature"]:
-        p = MEMORIES_DIR / d
-        print(f"[2/6] memories/{d}: {'✅' if p.exists() else '❌'}")
+        p = memories_dir / d
+        print(f"[2/5] memories/{d}: {'✅' if p.exists() else '❌'}")
 
-    knowledge_dir = Path.home() / ".hermes" / "knowledge"
-    print(f"[2/6] knowledge/: {'✅' if knowledge_dir.exists() else '❌'}")
-
-    # 3. 脚本
-    for script in ["tier.py", "activity.py", "chunker.py",
-                    "embedding_provider.py", "search.py", "curve-memory-indexer.py",
-                    "curve-memory-forgetting.py", "curve-memory-cli.py"]:
-        p = Path(__file__).parent / script
-        print(f"[3/6] scripts/{script}: {'✅' if p.exists() else '❌'}")
-
-    # 4. 索引
-    embedding_dir = MEMORIES_DIR / ".embedding_index"
-    fts5_path = MEMORIES_DIR / ".fts5" / "curve_memory_fts5.db"
-    print(f"[4/6] Embedding index: {'✅' if embedding_dir.exists() else '❌'}")
-    print(f"[4/6] FTS5 index: {'✅' if fts5_path.exists() else '❌'}")
-
-    # 5. Embedder
-    try:
-        from embedding_provider import create_embedding_provider
-        emb = create_embedding_provider()
-        if emb:
-            print(f"[5/6] Embedder: ✅ ({emb.name}, dim={emb.dim})")
-        else:
-            print(f"[5/6] Embedder: ❌ (degraded to BM25 + R(t))")
-    except Exception as e:
-        print(f"[5/6] Embedder: ❌ ({e}, degraded)")
-
-    # 6. Cron
-    print(f"[6/6] Cron: check with 'hermes cron list'")
-
-
-def cmd_setup(args):
-    """初始化：目录结构、cron 脚本、定时任务、交互式配置"""
-    import os, json, shutil
-    from pathlib import Path
-
-    memories_dir = Path.home() / ".hermes" / "memories"
-    scripts_dir = Path.home() / ".hermes" / "scripts"
-    plugin_core = Path.home() / ".hermes" / "plugins" / "curve-memory" / "curve_memory" / "core"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-
-    # 0. 创建必要的目录
-    for d in ["active", "archive/forgotten", "archive/mature", ".embedding_index", ".fts5"]:
-        (memories_dir / d).mkdir(parents=True, exist_ok=True)
-    Path.home() / ".hermes" / "knowledge"
-    print("  ✅ Directory structure ready")
-
-    # 1. 复制 cron 脚本
-    for name, target in [("curve-memory-forgetting.py", "forgetting.py"),
-                          ("curve-memory-indexer.py", "indexer.py")]:
-        dest = scripts_dir / name
-        src = plugin_core / target
-        if dest.exists() or dest.is_symlink():
-            dest.unlink()
-        shutil.copy2(str(src), str(dest))
-        print(f"  ✅ Copied: {name}")
-
-    # 2. 注册 cron 任务
-    cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
-    if cron_file.exists():
-        data = json.loads(cron_file.read_text())
-        existing_names = {j.get("name") for j in data.get("jobs", [])}
-        registered = 0
-        for jname, script, sched in [
-            ("snowlyn-memory-decay", "curve-memory-forgetting.py", "0 3 * * *"),
-            ("snowlyn-memory-index", "curve-memory-indexer.py", "45 3 * * *"),
-        ]:
-            if jname not in existing_names:
-                data["jobs"].append({
-                    "id": jname,
-                    "name": jname,
-                    "script": script,
-                    "no_agent": True,
-                    "schedule": {"kind": "cron", "expr": sched, "display": sched},
-                    "enabled": True,
-                    "state": "scheduled",
-                    "repeat": {"times": None, "completed": 0},
-                    "deliver": "local",
-                })
-                registered += 1
-        if registered:
-            cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-            print(f"  ✅ Registered {registered} cron job(s)")
-        else:
-            print("  ✅ Cron jobs already registered")
+    # 3. Embedder 连通性
+    embedder = _get_embedder()
+    if embedder:
+        print(f"[3/5] Embedder: ✅ ({embedder.name}, dim={embedder.dim})")
     else:
-        print("  ⚠️  Cron system not ready")
+        print(f"[3/5] Embedder: ❌ (degraded to BM25 + R(t))")
 
-    # 3. 检查嵌入模型
-    try:
-        import subprocess
-        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
-        if "qwen3-embedding" in r.stdout:
-            print("  ✅ Embedding model: qwen3-embedding:8b ready")
-        else:
-            print("  ⚠️  Run: ollama pull qwen3-embedding:8b")
-    except Exception:
-        print("  ⚠️  Ollama not detected")
-
-    # 4. 交互式配置
-    print("\n── 配置向导 ──")
-    try:
-        _interactive_config()
-    except Exception as e:
-        print(f"  ⚠️  配置向导失败: {e}")
-        print("     稍后可手动运行: hermes curve-memory config --interactive")
-
-    print("\n✅ Setup complete.")
-    print("   下一步: hermes config set memory.provider curve-memory")
-    print("           hermes gateway restart")
-
-
-def cmd_uninstall(args):
-    """卸载：清除 cron 脚本、cron 任务、配置、选项性清除数据"""
-    import shutil, json, subprocess
-    scripts_dir = Path.home() / ".hermes" / "scripts"
-    memories_dir = Path.home() / ".hermes" / "memories"
-    knowledge_dir = Path.home() / ".hermes" / "knowledge"
-
-    # 确认
-    if not args.yes:
-        try:
-            confirm = input("⚠️  确定要卸载 curve-memory 吗？数据将保留。[y/N] ")
-            if confirm.lower() != 'y':
-                print("已取消")
-                return
-        except (EOFError, KeyboardInterrupt):
-            print("\n已取消")
-            return
-
-    if args.all:
-        print("⚠️  这将删除所有记忆数据，包括 knowledge/ 中的永久知识！")
-        try:
-            confirm = input("再次确认：输入 'delete all' 继续：")
-            if confirm != 'delete all':
-                print("已取消")
-                return
-        except (EOFError, KeyboardInterrupt):
-            print("\n已取消")
-            return
-
-    print("=== Uninstalling curve-memory ===")
-
-    # 1. 删除 cron 脚本
-    for name in ["curve-memory-forgetting.py", "curve-memory-indexer.py"]:
-        p = scripts_dir / name
-        if p.exists():
-            p.unlink()
-            print(f"  ✅ Removed: {name}")
-
-    # 2. 删除 cron 任务
-    cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
-    if cron_file.exists():
-        data = json.loads(cron_file.read_text())
-        before = len(data.get("jobs", []))
-        data["jobs"] = [
-            j for j in data.get("jobs", [])
-            if "snowlyn-memory-decay" not in j.get("name", "")
-            and "snowlyn-memory-index" not in j.get("name", "")
-        ]
-        after = len(data.get("jobs", []))
-        cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-        print(f"  ✅ Removed {before - after} cron job(s)")
-
-    # 3. 清理 memory.provider 配置
-    try:
-        subprocess.run(["hermes", "config", "unset", "memory.provider"],
-                       capture_output=True, timeout=10)
-        print("  ✅ Cleared memory.provider config")
-    except Exception:
-        print("  ⚠️  Run manually: hermes config unset memory.provider")
-
-    # 4. 清除数据（仅 --all 时）
-    if args.all:
-        for d in [memories_dir / ".embedding_index",
-                   memories_dir / ".fts5",
-                   memories_dir / "archive" / "forgotten",
-                   memories_dir / "archive" / "mature",
-                   knowledge_dir]:
-            if d.exists():
-                shutil.rmtree(d)
-                print(f"  ✅ Removed: {d.relative_to(Path.home())}")
-        print("  ✅ All data cleared")
-    else:
-        print("  ℹ️  Memory data preserved (use --all to also clear data)")
-
-    print("Done. You can now run: hermes plugins remove curve-memory")
-
-
-def cmd_repair(args):
-    """修复：检查 ACTIVITY.yaml、清理锁、重建索引"""
-    import json, shutil
-    memories_dir = Path.home() / ".hermes" / "memories"
-    activity_path = memories_dir / "ACTIVITY.yaml"
-    lock_path = memories_dir / ".memory.lock"
-    found_issues = 0
-
-    print("=== Repair ===")
-
-    # 1. 检查 ACTIVITY.yaml 版本
-    print("1️⃣  ACTIVITY.yaml... ", end="", flush=True)
-    if activity_path.exists():
-        raw = activity_path.read_text(encoding="utf-8")
-        if "format_version:" in raw:
-            # 提取版本
-            import re
-            m = re.search(r'format_version:\s*(\d+)', raw)
-            ver = int(m.group(1)) if m else 0
-            if ver < 3:
-                print(f"⚠️  v{ver} → 需要迁移")
-                found_issues += 1
-            else:
-                print(f"✅ v{ver}")
-        else:
-            print("⚠️  无法识别格式")
-            found_issues += 1
-    else:
-        print("❌ 不存在")
-        found_issues += 1
-
-    # 2. 检查锁文件
-    print("2️⃣  Lock file... ", end="", flush=True)
-    if lock_path.exists():
-        pid = lock_path.read_text().strip()
-        import subprocess
-        r = subprocess.run(["ps", "-p", pid], capture_output=True, text=True, timeout=5)
-        if r.returncode != 0:
-            lock_path.unlink()
-            print(f"✅ 已清理僵尸锁 (PID {pid})")
-        else:
-            print(f"🔒 进程 {pid} 仍在运行")
-    else:
-        print("✅ 无残留")
-
-    # 3. 检查嵌入索引完整性
-    print("3️⃣  Embedding index... ", end="", flush=True)
-    emb_dir = memories_dir / ".embedding_index"
-    if emb_dir.exists():
-        broken = 0
-        for f in emb_dir.glob("*.jsonl"):
-            try:
-                for line in f.read_text().strip().splitlines():
-                    if line.strip():
-                        json.loads(line)
-            except (json.JSONDecodeError, Exception):
-                broken += 1
-                f.unlink()
-        if broken:
-            print(f"⚠️  修复 {broken} 个损坏文件")
-            found_issues += 1
-        else:
-            print(f"✅ {len(list(emb_dir.glob('*.jsonl')))} 个文件正常")
-    else:
-        print("⚠️  索引目录不存在")
-
-    # 4. 检查 FTS5
-    print("4️⃣  FTS5 index... ", end="", flush=True)
+    # 4. 索引完整性
+    embedding_dir = memories_dir / ".embedding_index"
     fts5_path = memories_dir / ".fts5" / "curve_memory_fts5.db"
-    if fts5_path.exists():
-        import sqlite3
-        try:
-            conn = sqlite3.connect(str(fts5_path))
-            conn.execute("SELECT count(*) FROM memory_fts")
-            conn.close()
-            print("✅")
-        except Exception:
-            print("⚠️  损坏，重建")
-            fts5_path.unlink()
-            found_issues += 1
-    else:
-        print("⚠️  不存在")
+    print(f"[4/5] Embedding index: {'✅' if embedding_dir.exists() and any(embedding_dir.iterdir()) else '❌'}")
+    print(f"[4/5] FTS5 index: {'✅' if fts5_path.exists() else '❌'}")
 
-    # 5. 自动修复
-    if args.fix:
-        print("\n🛠️  自动修复:")
-        if not activity_path.exists():
-            print("   ACTIVITY.yaml 丢失 → 跳过")
-        if lock_path.exists():
-            lock_path.unlink()
-        if found_issues > 0:
-            print(f"   建议运行: hermes curve-memory index --rebuild")
-
-    if found_issues == 0:
-        print("\n✅ 一切正常")
-    else:
-        print(f"\n⚠️  发现 {found_issues} 个问题" + ("，已部分修复" if args.fix else "，用 --fix 自动修复"))
-    print(f"   Lock: {lock_path}")
-
-
-def cmd_recover(args):
-    """恢复：从 archive/ 恢复已归档的记忆"""
-    import shutil
-    memories_dir = Path.home() / ".hermes" / "memories"
-    activity_path = memories_dir / "ACTIVITY.yaml"
-
-    # 搜索所有归档中的主题
-    candidates = []
-    for archive_dir in [memories_dir / "archive" / "forgotten", memories_dir / "archive" / "mature"]:
-        if archive_dir.exists():
-            for f in archive_dir.glob("*.md"):
-                if f.name != "FORGET_LOG.md":
-                    candidates.append((f.stem, archive_dir.name, f))
-
-    if args.list:
-        print("=== Archived Topics ===")
-        for topic, kind, path in sorted(candidates):
-            print(f"  {topic:25s} ({kind})")
-        return
-
-    if not args.topic:
-        print(f"可用主题: {', '.join(sorted(set(t for t,_,_ in candidates)))}")
-        print("使用: hermes curve-memory recover <topic>")
-        return
-
-    # 查找主题
-    found = [c for c in candidates if c[0] == args.topic]
-    if not found:
-        print(f"❌ 未找到 '{args.topic}' 在 archive/ 中")
-        return
-
-    for topic, kind, src_path in found:
-        dst_path = memories_dir / "active" / f"{topic}.md"
-        if dst_path.exists():
-            print(f"⚠️  active/{topic}.md 已存在，跳过")
-            continue
-        shutil.copy2(str(src_path), str(dst_path))
-        print(f"✅ 已从 archive/{kind}/ 恢复: {topic}")
-
-    print("ℹ️  需手动添加索引: hermes curve-memory index --rebuild")
-
-
-def cmd_config(args):
-    """查看当前配置或交互式配置"""
-    if args.interactive:
-        _interactive_config()
-        return
-    try:
-        from curve_memory.core.config import load_config, format_config
-        cfg = load_config()
-        print(format_config(cfg))
-        print("\n要修改配置，编辑 ~/.hermes/config.yaml 中的 memory.curve-memory 段。")
-    except Exception as e:
-        print(f"加载配置失败: {e}")
-
-
-def _interactive_config():
-    """交互式配置向导 — 安全地读写 memory.curve-memory 段"""
-    import os
-    config_path = Path.home() / ".hermes" / "config.yaml"
-
-    # 读取完整配置
-    raw = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    lines = raw.split("\n")
-
-    # 定位 memory.curve-memory 段的起止行
-    section_start = None
-    section_end = None
-    in_memory = False
-    in_curve = False
-    curve_indent = 0
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        # 跳过空行和注释
-        if not stripped or stripped.startswith("#"):
-            continue
-        # 检测 memory: 顶层键
-        if stripped == "memory:" or stripped.startswith("memory:"):
-            in_memory = True
-            continue
-        if not in_memory:
-            continue
-        # 检测 curve-memory:
-        space = len(line) - len(line.lstrip())
-        if stripped == "curve-memory:" or stripped.startswith("curve-memory:"):
-            in_curve = True
-            curve_indent = space
-            section_start = i
-            continue
-        if in_curve:
-            # 如果缩进回到 curve_indent 同等或更少 → 段结束
-            if space <= curve_indent and stripped:
-                section_end = i
-                break
-    if section_start is not None and section_end is None:
-        section_end = len(lines)
-
-    # 如果没有 curve-memory 段，追加
-    if section_start is None:
-        raw += "\nmemory:\n  plugin: curve-memory\n  curve-memory:\n    embedding:\n      model: qwen3-embedding:8b\n      base_url: http://localhost:11434\n    search:\n      alpha: 0.35\n      beta: 0.45\n      gamma: 0.20\n      top_k: 5\n    tier:\n      archive_threshold_days: 30\n      mature_access_count: 20\n      mature_t_days: 3\n"
-        lines = raw.split("\n")
-        # 重新定位
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped == "curve-memory:" or stripped.startswith("curve-memory:"):
-                section_start = i
-                curve_indent = len(line) - len(line.lstrip())
-                break
-        section_end = len(lines)
-
-    # 只提取 curve-memory 段的行
-    section_lines = lines[section_start:section_end]
-
-    prompts = [
-        ("嵌入模型", "model", "qwen3-embedding:8b"),
-        ("Ollama 地址", "base_url", "http://localhost:11434"),
-        ("关键词权重 (alpha)", "alpha", "0.35"),
-        ("语义权重 (beta)", "beta", "0.45"),
-        ("新鲜度权重 (gamma)", "gamma", "0.20"),
-        ("归档天数", "archive_threshold_days", "30"),
-    ]
-
-    print("=== Curve Memory 配置向导 ===")
-    print("直接回车使用默认值。\n")
-
-    for label, key, default in prompts:
-        current = default
-        for line in section_lines:
-            if line.strip().startswith(f"{key}:"):
-                parts = line.split(":", 1)
-                if len(parts) == 2:
-                    current = parts[1].strip().strip("'\"")
-                break
-        try:
-            val = input(f"  {label} [{current}]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n已取消")
-            return
-        if val:
-            for j, line in enumerate(section_lines):
-                if line.strip().startswith(f"{key}:") or line.strip().startswith(f"# {key}:"):
-                    indent = line[:len(line) - len(line.lstrip())]
-                    section_lines[j] = f"{indent}{key}: {val}"
-                    break
-            else:
-                # key 不存在，在 section 第一行后插入
-                indent = " " * (curve_indent + 4)
-                section_lines.insert(1, f"{indent}{key}: {val}")
-                section_end += 1
-
-    # 把修改后的 section_lines 写回 lines
-    lines[section_start:section_end] = section_lines
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print("\n✅ 配置已更新")
-    print("   查看: hermes curve-memory config")
-    print("   重启: hermes gateway restart")
-
-
-def cmd_deactivate(args):
-    """停用：重设 memory.provider，保留数据"""
-    import subprocess
-    try:
-        subprocess.run(["hermes", "config", "unset", "memory.provider"],
-                       capture_output=True, timeout=10)
-        print("✅ curve-memory 已停用（数据已保留）")
-        print("   启用: hermes curve-memory activate")
-    except Exception as e:
-        print(f"⚠️  {e}")
-        print("   手动: hermes config unset memory.provider")
+    # 5. 配置
+    config_path = hermes_home / "curve-memory-config.json"
+    print(f"[5/5] Config file: {'✅' if config_path.exists() else '❌ (using defaults)'}")
 
 
 def cmd_activate(args):
-    """重新激活"""
-    import subprocess
+    """激活曲线记忆系统"""
     try:
         subprocess.run(["hermes", "config", "set", "memory.provider", "curve-memory"],
                        capture_output=True, timeout=10)
@@ -694,295 +229,172 @@ def cmd_activate(args):
         print("   手动: hermes config set memory.provider curve-memory")
 
 
-def cmd_undo(args):
-    """撤销最近的 touch/forget 操作"""
+def cmd_deactivate(args):
+    """停用曲线记忆系统"""
     try:
-        from curve_memory.core.activity_log import get_recent_ops
-        from curve_memory.core.activity import parse_activity, format_activity
-    except ModuleNotFoundError:
-        from activity_log import get_recent_ops
-        from activity import parse_activity, format_activity
-
-    ops = get_recent_ops(10)
-    if not ops:
-        print("没有可撤销的操作")
-        return
-
-    print("最近操作:")
-    for i, op in enumerate(ops):
-        ts = op.get("ts", 0)
-        from datetime import datetime
-        tstr = datetime.fromtimestamp(ts).strftime("%H:%M")
-        print(f"  [{i}] {tstr} {op['op']:8s} {op['topic']}")
-
-    print("\n撤销: hermes curve-memory touch <topic> 或 hermes curve-memory recover <topic>")
-
-
-def cmd_stats(args):
-    """详细统计"""
-    from curve_memory.core.activity_log import get_op_stats, get_recent_ops
-    from curve_memory.core.tier import forgetting_curve, r_to_tier_name
-    from curve_memory.core.activity import parse_activity
-
-    activity_path = Path.home() / ".hermes" / "memories" / "ACTIVITY.yaml"
-    if activity_path.exists():
-        raw = activity_path.read_text()
-        data = parse_activity(raw)
-        memories = data.get("memories", {})
-        active_count = len(memories)
-
-        # TIER 分布
-        tier_dist = {}
-        total_t = 0
-        for topic, info in memories.items():
-            t = info.get("t", 0)
-            total_t += t
-            r = forgetting_curve(t)
-            tier = r_to_tier_name(r)
-            tier_dist[tier] = tier_dist.get(tier, 0) + 1
-
-        avg_t = total_t / active_count if active_count else 0
-
-        print("=== Curve Memory Stats ===")
-        print(f"  活跃记忆:     {active_count}")
-        print(f"  平均 t 值:    {avg_t:.1f} 天")
-        print(f"  平均 R(t):    {forgetting_curve(avg_t):.4f}")
-        print(f"\n  TIER 分布:")
-        for tier in ["TIER_5 🔥", "TIER_4 📗", "TIER_3 📙", "TIER_2 📕", "TIER_1 📦", "ARCHIVE 🗄️"]:
-            c = tier_dist.get(tier, 0)
-            bar = "█" * c
-            print(f"    {tier:15s}: {c:2d} {bar}")
-
-    else:
-        print("ACTIVITY.yaml 不存在")
-
-    # 操作统计
-    op_stats = get_op_stats()
-    if op_stats:
-        print(f"\n  操作统计:")
-        for op, count in sorted(op_stats.items(), key=lambda x: -x[1]):
-            print(f"    {op}: {count}")
-
-    # 索引
-    emb_dir = Path.home() / ".hermes" / "memories" / ".embedding_index"
-    if emb_dir.exists():
-        size = sum(f.stat().st_size for f in emb_dir.glob("*.jsonl"))
-        print(f"\n  嵌入索引:     {len(list(emb_dir.glob('*.jsonl')))} 文件, {size/1024:.0f} KB")
-
-
-def cmd_export(args):
-    """导出记忆数据为 tar.gz"""
-    import tarfile, tempfile
-    memories_dir = Path.home() / ".hermes" / "memories"
-    knowledge_dir = Path.home() / ".hermes" / "knowledge"
-    output = args.output
-
-    print(f"导出到 {output}...")
-    with tarfile.open(output, "w:gz") as tar:
-        for d in [memories_dir / "active", memories_dir / "archive",
-                   memories_dir / "ACTIVITY.yaml", memories_dir / "MEMORY.md",
-                   knowledge_dir]:
-            if d.exists():
-                tar.add(str(d), arcname=str(d.relative_to(Path.home() / ".hermes")))
-    print(f"✅ 导出完成 ({Path(output).stat().st_size / 1024:.0f} KB)")
-
-
-def cmd_plot(args):
-    """ASCII 显示 R(t) 曲线"""
-    from curve_memory.core.tier import forgetting_curve, r_to_tier_name
-
-    print("=== R(t) 遗忘曲线 ===")
-    print("R(t) = 0.462 + 0.538 * exp(-t / 2.71)")
-    print()
-    print("天  R(t)    TIER")
-    print("-" * 30)
-    for t in range(0, 35, 1):
-        r = forgetting_curve(t)
-        tier = r_to_tier_name(r)
-        bar_len = int((r - 0.462) / 0.538 * 30)
-        bar = "█" * bar_len
-        print(f"{t:2d}  {r:.4f}  {tier:12s} {bar}")
-    print()
-    print("图例: 每个 █ 代表约 3.3% 的保留率")
-
-
-def cmd_install_wizard(args):
-    """交互式安装向导：检查依赖、初始化、配置"""
-    ok, ng, warn = "✅", "❌", "⚠️"
-    print("=== Curve Memory 安装向导 ===\n")
-
-    # 1. 检查 Ollama
-    print("1️⃣ 检查 Ollama... ", end="", flush=True)
-    try:
-        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
-        if r.returncode == 0:
-            print(f"{ok} ollama 运行中")
-        else:
-            print(f"{ng} ollama 未运行 (ollama serve)")
-    except FileNotFoundError:
-        print(f"{ng} Ollama 未安装")
+        subprocess.run(["hermes", "config", "unset", "memory.provider"],
+                       capture_output=True, timeout=10)
+        print("✅ curve-memory 已停用（数据已保留）")
+        print("   启用: hermes curve-memory activate")
     except Exception as e:
-        print(f"{ng} {e}")
+        print(f"⚠️  {e}")
+        print("   手动: hermes config unset memory.provider")
 
-    # 2. 检查嵌入模型
-    print("2️⃣ 检查 qwen3-embedding:8b... ", end="", flush=True)
-    try:
-        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
-        if "qwen3-embedding" in r.stdout:
-            print(f"{ok} 已安装")
+
+def cmd_index(args):
+    """构建索引（增量/全量）"""
+    import sqlite3
+    import hashlib
+
+    memories_dir = _get_memories_dir()
+    active_dir = memories_dir / "active"
+    embedding_dir = memories_dir / ".embedding_index"
+    fts5_dir = memories_dir / ".fts5"
+    fts5_path = fts5_dir / "curve_memory_fts5.db"
+    mtime_cache_path = memories_dir / ".mtime_cache.json"
+
+    # 创建目录
+    fts5_dir.mkdir(parents=True, exist_ok=True)
+    embedding_dir.mkdir(parents=True, exist_ok=True)
+
+    embedder = _get_embedder()
+    activity = load_activity(memories_dir)
+    memories = activity.get("memories", {}) if activity else {}
+
+    now = time.time()
+
+    # 初始化 FTS5
+    conn = sqlite3.connect(str(fts5_path))
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+            topic, content, tokenize='unicode61'
+        )
+    """)
+    conn.commit()
+
+    # 加载 mtime 缓存
+    mtime_cache = {}
+    if mtime_cache_path.exists() and not args.rebuild:
+        mtime_cache = json.loads(mtime_cache_path.read_text())
+
+    topics = sorted([f.stem for f in active_dir.glob("*.md") if f.is_file()])
+    changed = 0
+    skipped = 0
+
+    for topic in topics:
+        filepath = active_dir / f"{topic}.md"
+        if not filepath.exists():
+            continue
+
+        current_mtime = str(filepath.stat().st_mtime)
+
+        # 增量模式：跳过未变更的文件
+        if not args.rebuild and mtime_cache.get(topic) == current_mtime:
+            skipped += 1
+            continue
+
+        content = filepath.read_text(encoding="utf-8")
+
+        # 获取 TIER 级别
+        info = memories.get(topic, {})
+        raw_t = info.get("t", 0)
+        if isinstance(raw_t, (int, float)) and raw_t > 1000000000000:
+            t_days = (now - raw_t) / 86400
         else:
-            print(f"{warn} 未找到，执行 pull...")
-            r2 = subprocess.run(["ollama", "pull", "qwen3-embedding:8b"], timeout=300)
-            print(f"   → {'✅ 完成' if r2.returncode == 0 else '❌ 失败'}")
-    except Exception as e:
-        print(f"{ng} {e}")
+            t_days = raw_t
+        r = forgetting_curve(t_days)
+        tier_level = __import__("curve_memory.core.tier", fromlist=["r_to_tier_level"]).r_to_tier_level(r)
 
-    # 3. 检查 numpy
-    print("3️⃣ 检查 numpy... ", end="", flush=True)
-    try:
-        import numpy
-        print(f"{ok} {numpy.__version__}")
-    except ImportError:
-        print(f"{warn} 未安装 (pip install numpy)")
+        # 分块
+        chunks = chunk_tier_summary(topic, content, tier_level)
 
-    # 4. 创建目录 + 复制脚本
-    print("4️⃣ 初始化目录结构... ", end="", flush=True)
-    plugin_core = Path.home() / ".hermes" / "plugins" / "curve-memory" / "curve_memory" / "core"
-    scripts_dir = Path.home() / ".hermes" / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-    for name in ["curve-memory-forgetting.py", "curve-memory-indexer.py"]:
-        src = plugin_core / ("forgetting.py" if "forgetting" in name else "indexer.py")
-        dst = scripts_dir / name
-        shutil.copy2(str(src), str(dst))
-    print(f"{ok}")
+        # Embedding
+        if embedder:
+            embedding_file = embedding_dir / f"{topic}.jsonl"
+            with open(embedding_file, "w", encoding="utf-8") as f:
+                for chunk in chunks:
+                    text = chunk["text"]
+                    if not text.strip():
+                        continue
+                    try:
+                        vector = embedder.embed(text)
+                    except Exception as e:
+                        print(f"  ⚠️  {topic}/{chunk['chunk']}: embed failed: {e}")
+                        continue
+                    record = {
+                        "topic": topic,
+                        "chunk": chunk["chunk"],
+                        "text": text,
+                        "vector": vector,
+                    }
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            print(f"  📦 {topic}: {len(chunks)} chunks embedded")
 
-    # 5. cron 注册
-    print("5️⃣ 检查 cron 任务... ", end="", flush=True)
-    cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
-    if cron_file.exists():
-        data = json.loads(cron_file.read_text())
-        existing = {j.get("name") for j in data.get("jobs", [])}
-        new = []
-        for jname, script, sched in [
-            ("snowlyn-memory-decay", "curve-memory-forgetting.py", "0 3 * * *"),
-            ("snowlyn-memory-index", "curve-memory-indexer.py", "45 3 * * *"),
-        ]:
-            if jname not in existing:
-                new.append(jname)
-        if new:
-            print(f"{warn} 需手动注册: {', '.join(new)}")
-            print(f"   运行: hermes curve-memory setup")
-        else:
-            print(f"{ok} 已注册")
-    else:
-        print(f"{warn} cron 系统未就绪")
+        # FTS5
+        conn.execute("DELETE FROM memory_fts WHERE topic = ?", (topic,))
+        conn.execute("INSERT INTO memory_fts (topic, content) VALUES (?, ?)", (topic, content))
+        conn.commit()
 
-    # 6. 配置检查
-    print("6️⃣ 检查 memory.provider 配置... ", end="", flush=True)
-    config_path = Path.home() / ".hermes" / "config.yaml"
-    if config_path.exists():
-        raw = config_path.read_text()
-        if "memory.provider" in raw or "memory:" in raw:
-            print(f"{ok}")
-        else:
-            print(f"{warn} 未设置 → hermes config set memory.provider curve-memory")
+        mtime_cache[topic] = current_mtime
+        changed += 1
 
-    # 7. 索引检查
-    print("7️⃣ 检查索引状态... ", end="", flush=True)
-    emb_dir = Path.home() / ".hermes" / "memories" / ".embedding_index"
-    if emb_dir.exists() and any(emb_dir.iterdir()):
-        print(f"{ok} 有 {len(list(emb_dir.glob('*.jsonl')))} 个嵌入文件")
-    else:
-        print(f"{warn} 索引为空 → hermes curve-memory index --rebuild")
+    # 清理不存在的 topic 索引
+    active_set = set(topics)
+    for fpath in embedding_dir.glob("*.jsonl"):
+        if fpath.stem not in active_set:
+            fpath.unlink()
+    cursor = conn.execute("SELECT DISTINCT topic FROM memory_fts")
+    for row in cursor.fetchall():
+        if row[0] not in active_set:
+            conn.execute("DELETE FROM memory_fts WHERE topic = ?", (row[0],))
+    conn.commit()
+    conn.close()
 
-    print("\n✅ 检查完成。按上述 ⚠️ 提示操作即可。")
+    # 清理 mtime cache
+    stale = [t for t in mtime_cache if t not in active_set]
+    for t in stale:
+        del mtime_cache[t]
 
+    mtime_cache_path.write_text(json.dumps(mtime_cache, ensure_ascii=False, indent=2))
+
+    print(f"\n📊 Index: {changed} changed, {skipped} skipped" if not args.rebuild else f"\n📊 Rebuilt: {changed} topics")
+
+
+# ── Registration ─────────────────────────────────────────────────────
 
 def register_cli(subparser) -> None:
-    """Called by Hermes memory provider CLI discovery during argparse setup.
-
-    Creates the ``hermes curve-memory`` subcommand tree.
-    """
+    """Called by Hermes memory provider CLI discovery."""
     subs = subparser.add_subparsers(dest="curve_memory_command")
     register_subcommands(subs)
 
 
 def register_subcommands(sub):
-    """注册所有子命令到给定的 subparsers 组（供 Hermes 插件系统和 main() 共用）"""
+    """注册所有子命令（7个）"""
     p_search = sub.add_parser("search", help="三路混合检索")
     p_search.add_argument("query", help="检索关键词")
     p_search.add_argument("--top-k", type=int, default=5, help="返回条数")
     p_search.add_argument("--json", action="store_true", help="JSON 输出")
     p_search.set_defaults(func=cmd_search)
 
-    p_index = sub.add_parser("index", help="构建索引")
-    p_index.add_argument("--rebuild", action="store_true", help="全量重建")
-    p_index.add_argument("--incremental", action="store_true", help="增量更新")
-    p_index.set_defaults(func=cmd_index)
-
-    p_status = sub.add_parser("status", help="状态查看")
+    p_status = sub.add_parser("status", help="系统状态查看")
     p_status.set_defaults(func=cmd_status)
-
-    p_touch = sub.add_parser("touch", help="置 t=0")
-    p_touch.add_argument("topic", help="记忆主题")
-    p_touch.set_defaults(func=cmd_touch)
-
-    p_tick = sub.add_parser("daily-tick", help="手动触发每日衰减")
-    p_tick.set_defaults(func=cmd_daily_tick)
-
-    p_forget = sub.add_parser("forget", help="手动归档")
-    p_forget.add_argument("topic", help="记忆主题")
-    p_forget.set_defaults(func=cmd_forget)
-
-    p_mature = sub.add_parser("mature", help="手动标记成熟")
-    p_mature.add_argument("topic", help="记忆主题")
-    p_mature.set_defaults(func=cmd_mature)
-
-    p_check = sub.add_parser("check", help="健康检查")
-    p_check.set_defaults(func=cmd_check)
-
-    p_setup = sub.add_parser("setup", help="初始化：目录、cron、交互式配置")
-    p_setup.set_defaults(func=cmd_setup)
-
-    p_uninstall = sub.add_parser("uninstall", help="卸载：清除软链接、cron、数据")
-    p_uninstall.add_argument("--all", action="store_true", help="同时清除记忆数据")
-    p_uninstall.add_argument("-y", "--yes", action="store_true", help="跳过确认")
-    p_uninstall.set_defaults(func=cmd_uninstall)
-
-    p_wizard = sub.add_parser("install-wizard", help="安装向导：检查依赖并初始化")
-    p_wizard.set_defaults(func=cmd_install_wizard)
-
-    p_repair = sub.add_parser("repair", help="修复：检查并修复常见问题")
-    p_repair.add_argument("--fix", action="store_true", help="自动修复")
-    p_repair.set_defaults(func=cmd_repair)
-
-    p_recover = sub.add_parser("recover", help="从 archive/ 恢复已归档的记忆")
-    p_recover.add_argument("topic", nargs="?", help="主题名称")
-    p_recover.add_argument("--list", action="store_true", help="列出可恢复的主题")
-    p_recover.set_defaults(func=cmd_recover)
 
     p_config = sub.add_parser("config", help="查看当前配置或交互式配置")
     p_config.add_argument("-i", "--interactive", action="store_true", help="交互式配置向导")
     p_config.set_defaults(func=cmd_config)
 
-    p_deact = sub.add_parser("deactivate", help="停用曲线记忆系统（保留数据）")
-    p_deact.set_defaults(func=cmd_deactivate)
+    p_check = sub.add_parser("check", help="健康检查")
+    p_check.set_defaults(func=cmd_check)
 
-    p_act = sub.add_parser("activate", help="重新激活曲线记忆系统")
-    p_act.set_defaults(func=cmd_activate)
+    p_activate = sub.add_parser("activate", help="重新激活曲线记忆系统")
+    p_activate.set_defaults(func=cmd_activate)
 
-    p_undo = sub.add_parser("undo", help="撤销最近的操作")
-    p_undo.set_defaults(func=cmd_undo)
+    p_deactivate = sub.add_parser("deactivate", help="停用曲线记忆系统（保留数据）")
+    p_deactivate.set_defaults(func=cmd_deactivate)
 
-    p_stats = sub.add_parser("stats", help="详细统计信息")
-    p_stats.set_defaults(func=cmd_stats)
-
-    p_export = sub.add_parser("export", help="导出记忆数据")
-    p_export.add_argument("output", nargs="?", default="curve-memory-export.tar.gz", help="输出文件路径")
-    p_export.set_defaults(func=cmd_export)
-
-    p_plot = sub.add_parser("plot", help="显示 R(t) 曲线 ASCII 图")
-    p_plot.set_defaults(func=cmd_plot)
+    p_index = sub.add_parser("index", help="构建索引（增量/全量）")
+    p_index.add_argument("--rebuild", action="store_true", help="全量重建")
+    p_index.set_defaults(func=cmd_index)
 
 
 def main():
