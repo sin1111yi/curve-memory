@@ -203,33 +203,44 @@ class CurveMemoryProvider(MemoryProvider):
                      getattr(self._searcher, 'degrade_level', 'N/A'),
                      len(self._user_profile))
 
-    # ── User profile (USER.md format) ─────────────────────────────
+    # ── User profile (natural language) ────────────────────────────
 
     def _load_user_profile(self):
-        """从磁盘加载用户画像（Markdown key-value 格式）"""
+        """从磁盘加载用户画像（自然语言 + 工具条目）"""
+        self._user_profile = {}  # dict for tool ops
+        self._user_profile_raw = ""  # raw natural language section
         if self._user_profile_path and self._user_profile_path.exists():
             try:
-                self._user_profile = {}
-                for line in self._user_profile_path.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or line.startswith("---"):
-                        continue
-                    if ":" in line:
-                        key, _, value = line.partition(":")
-                        self._user_profile[key.strip()] = value.strip()
+                text = self._user_profile_path.read_text(encoding="utf-8")
+                # 分割手动区（## Auto）
+                parts = text.split("## Auto")
+                self._user_profile_raw = parts[0].strip()
+                # 去掉顶部的 # User Profile 标题（system_prompt_block 会重加）
+                if self._user_profile_raw.startswith("# User Profile"):
+                    self._user_profile_raw = self._user_profile_raw[len("# User Profile"):].strip()
+                if len(parts) > 1:
+                    for line in parts[1].splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#") and ":" in line:
+                            k, _, v = line.partition(":")
+                            self._user_profile[k.strip()] = v.strip()
             except Exception as e:
                 logger.debug("User profile load error: %s", e)
                 self._user_profile = {}
-        else:
-            self._user_profile = {}
+                self._user_profile_raw = ""
 
     def _save_user_profile(self):
-        """持久化用户画像为 Markdown 格式"""
+        """持久化用户画像：自然语言 + 工具条目"""
         if self._user_profile_path:
             self._user_profile_path.parent.mkdir(parents=True, exist_ok=True)
-            lines = ["# User Profile", "", f"# 由 curve-memory 管理，更新于 {time.strftime('%Y-%m-%d %H:%M')}", ""]
-            for k, v in sorted(self._user_profile.items()):
-                lines.append(f"{k}: {v}")
+            lines = [self._user_profile_raw or "# User Profile", ""]
+            if self._user_profile:
+                lines.append("## Auto")
+                lines.append("")
+                lines.append(f"更新于 {time.strftime('%Y-%m-%d %H:%M')}")
+                lines.append("")
+                for k, v in sorted(self._user_profile.items()):
+                    lines.append(f"{k}: {v}")
             self._user_profile_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # ── Migration / cleanup ─────────────────────────────────────────
@@ -377,9 +388,8 @@ class CurveMemoryProvider(MemoryProvider):
             "Retrieved memories show a TIER level: TIER_5 (recent, ≤1d), "
             "TIER_4 (≤3d), TIER_3 (≤7d), TIER_2 (≤14d), ARCHIVE (≥30d)."
         ]
-        if self._user_profile:
-            entries = "\n".join(f"  {k}: {v}" for k, v in self._user_profile.items())
-            lines.append(f"\n## User Profile\n{entries}")
+        if self._user_profile_raw:
+            lines.append(f"\n## User Profile\n{self._user_profile_raw}")
         return "\n".join(lines)
 
     # ── Prefetch ────────────────────────────────────────────────────
