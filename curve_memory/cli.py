@@ -253,54 +253,74 @@ def cmd_check(args):
 
 
 def cmd_setup(args):
-    """创建 cron 脚本软链接和定时任务"""
-    import os
-    import json
+    """初始化：复制 cron 脚本、注册定时任务、检查目录结构"""
+    import os, json, shutil
+    from pathlib import Path
+
+    memories_dir = Path.home() / ".hermes" / "memories"
     scripts_dir = Path.home() / ".hermes" / "scripts"
     plugin_core = Path.home() / ".hermes" / "plugins" / "curve-memory" / "curve_memory" / "core"
     scripts_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. 软链接
-    links = [
-        ("curve-memory-forgetting.py", "forgetting.py"),
-        ("curve-memory-indexer.py", "indexer.py"),
-    ]
+    # 0. 创建必要的目录
+    for d in ["active", "archive/forgotten", "archive/mature", ".embedding_index", ".fts5"]:
+        (memories_dir / d).mkdir(parents=True, exist_ok=True)
+    Path.home() / ".hermes" / "knowledge"
+    print("  ✅ Directory structure ready")
+
     # 1. 复制 cron 脚本
-    for name, target in links:
+    for name, target in [("curve-memory-forgetting.py", "forgetting.py"),
+                          ("curve-memory-indexer.py", "indexer.py")]:
         dest = scripts_dir / name
         src = plugin_core / target
         if dest.exists() or dest.is_symlink():
             dest.unlink()
-        import shutil
         shutil.copy2(str(src), str(dest))
         print(f"  ✅ Copied: {name}")
 
-    # 2. 恢复 cron 任务
+    # 2. 注册 cron 任务
     cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
     if cron_file.exists():
         data = json.loads(cron_file.read_text())
         existing_names = {j.get("name") for j in data.get("jobs", [])}
+        registered = 0
+        for jname, script, sched in [
+            ("snowlyn-memory-decay", "curve-memory-forgetting.py", "0 3 * * *"),
+            ("snowlyn-memory-index", "curve-memory-indexer.py", "45 3 * * *"),
+        ]:
+            if jname not in existing_names:
+                data["jobs"].append({
+                    "id": jname,
+                    "name": jname,
+                    "script": script,
+                    "no_agent": True,
+                    "schedule": {"kind": "cron", "expr": sched, "display": sched},
+                    "enabled": True,
+                    "state": "scheduled",
+                    "repeat": {"times": None, "completed": 0},
+                    "deliver": "local",
+                })
+                registered += 1
+        if registered:
+            cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+            print(f"  ✅ Registered {registered} cron job(s)")
+        else:
+            print("  ✅ Cron jobs already registered")
+    else:
+        print("  ⚠️  Cron system not ready")
 
-        new_jobs = []
-        if "snowlyn-memory-decay" not in existing_names:
-            new_jobs.append({
-                "name": "snowlyn-memory-decay",
-                "script": "curve-memory-forgetting.py",
-                "no_agent": True,
-            })
-        if "snowlyn-memory-index" not in existing_names:
-            new_jobs.append({
-                "name": "snowlyn-memory-index",
-                "script": "curve-memory-indexer.py",
-                "no_agent": True,
-            })
+    # 3. 检查嵌入模型
+    try:
+        import subprocess
+        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
+        if "qwen3-embedding" in r.stdout:
+            print("  ✅ Embedding model: qwen3-embedding:8b ready")
+        else:
+            print("  ⚠️  Run: ollama pull qwen3-embedding:8b")
+    except Exception:
+        print("  ⚠️  Ollama not detected")
 
-        if new_jobs:
-            print(f"  ℹ️  Cron jobs not restored (use 'hermes cron' to add manually)")
-            print(f"     Run: hermes cron create --script curve-memory-forgetting.py --schedule '0 3 * * *'")
-            print(f"     Run: hermes cron create --script curve-memory-indexer.py --schedule '45 3 * * *'")
-
-    print(f"Setup complete. Cron scripts at {scripts_dir}")
+    print("Setup complete.")
 
 
 def cmd_uninstall(args):
