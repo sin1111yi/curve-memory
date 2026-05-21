@@ -241,6 +241,10 @@ curve-memory mature <主题>            # 标记为成熟
 curve-memory check                    # 全面健康检查
 ```
 
+## 相关项目
+
+- [ralqlator](https://github.com/sin1111yi/ralqlator) — Rust 命令行计算器，用于实时验证 R(t) 公式（`ralqlator "0.462 + 0.538 * pow(C_E, -t / 2.71)"`）
+
 ## 项目结构
 
 ```

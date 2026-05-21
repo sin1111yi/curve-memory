@@ -241,6 +241,10 @@ curve-memory mature <topic>          # Mark topic as mature
 curve-memory check                   # Full health check
 ```
 
+## Related Projects
+
+- [ralqlator](https://github.com/sin1111yi/ralqlator) — Rust CLI calculator used for real-time R(t) formula verification (`ralqlator "0.462 + 0.538 * pow(C_E, -t / 2.71)"`)
+
 ## Project Structure
 
 ```
