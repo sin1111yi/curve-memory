@@ -21,8 +21,20 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tier import forgetting_curve, r_to_tier_name
-from activity import parse_activity, format_activity
+# 插件路径兼容
+_PLUGIN_PARENT = Path(__file__).resolve().parent.parent  # plugins/curve-memory/
+if str(_PLUGIN_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_PARENT))
+_PLUGIN_CORE = Path.home() / ".hermes" / "plugins" / "curve-memory"
+if _PLUGIN_CORE.exists() and str(_PLUGIN_CORE) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_CORE))
+
+try:
+    from tier import forgetting_curve, r_to_tier_name
+    from activity import parse_activity, format_activity
+except ModuleNotFoundError:
+    from curve_memory.core.tier import forgetting_curve, r_to_tier_name
+    from curve_memory.core.activity import parse_activity, format_activity
 
 MEMORIES_DIR = Path.home() / ".hermes" / "memories"
 
@@ -61,7 +73,7 @@ def cmd_search(args):
 
 
 def cmd_index(args):
-    import importlib
+    import importlib.util
     spec = importlib.util.spec_from_file_location(
         "indexer", os.path.join(os.path.dirname(__file__), "curve-memory-indexer.py"))
     mod = importlib.util.module_from_spec(spec)
@@ -155,7 +167,7 @@ def cmd_daily_tick(args):
 
 def cmd_forget(args):
     from activity import parse_activity, format_activity
-    import importlib
+    import importlib.util
     spec = importlib.util.spec_from_file_location(
         "forgetting", os.path.join(os.path.dirname(__file__), "curve-memory-forgetting.py"))
     mod = importlib.util.module_from_spec(spec)
