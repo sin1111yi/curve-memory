@@ -86,6 +86,16 @@ hermes curve-memory status
 hermes curve-memory search "test"
 ```
 
+### User Profile
+
+Your user profile (preferences, personal info the agent should know) is stored in `~/.hermes/memories/USER.md`. Edit it directly with natural language, or let the agent manage it via:
+
+- `curve_memory_user_get` — view stored profile
+- `curve_memory_user_set` — add/update info
+- `curve_memory_user_delete` — remove info
+
+When built-in memory is disabled (`memory.memory_enabled: false`), curve-memory manages both memories and user profile exclusively.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

@@ -376,12 +376,32 @@ hermes curve-memory index --rebuild  # 全量重建
 | `prefetch(query)` | 每轮对话前调用——注入最多 3 条相关记忆 |
 | `sync_turn(user, asst)` | 每轮对话后调用——更新提到主题的活性 |
 | `system_prompt_block()` | 记忆系统的简短描述 |
-| `get_tool_schemas()` | 返回 OpenAI function-calling 格式的 `curve_memory_search` 工具 |
-| `handle_tool_call()` | 执行 `curve_memory_search` 工具调用 |
+| `get_tool_schemas()` | 返回 4 个工具的 OpenAI function-calling 格式定义（见下文） |
+| `handle_tool_call()` | 处理所有 4 个工具调用 |
 | `get_config_schema()` | 为 `hermes memory setup` 提供配置 schema |
 | `save_config(values, hermes_home)` | 从 schema values 保存配置 |
 | `on_session_end(messages)` | 对话结束时惰性归档 |
 | `shutdown()` | 清理资源 |
+
+## 工具
+
+插件暴露 4 个工具供 agent 调用：
+
+| 工具 | 用途 | 主要参数 |
+|------|------|----------|
+| `curve_memory_search` | 三路混合记忆检索 | `query` (str), `top_k` (int, 默认 5) |
+| `curve_memory_user_get` | 获取全部用户画像条目 | — |
+| `curve_memory_user_set` | 存储用户信息（跨会话持久化） | `key` (str), `value` (str) |
+| `curve_memory_user_delete` | 删除用户信息 | `key` (str) |
+
+### 用户画像
+
+用户画存储于 `{hermes_home}/memories/USER.md`，使用自然语言格式。
+通过 `system_prompt_block()` 注入系统提示，`prefetch()` 可根据查询关键词匹配。
+
+文件含两个区域：
+- **手动区**（顶部）：自由格式自然语言——直接编辑
+- **## Auto 区**（底部）：工具生成的条目——通过 `curve_memory_user_set`/`delete` 管理
 
 ## 路线图
 

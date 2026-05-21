@@ -376,12 +376,31 @@ The plugin implements the full `MemoryProvider` abstract base class:
 | `prefetch(query)` | Called before each turn — injects up to 3 relevant memories |
 | `sync_turn(user, asst)` | Called after each turn — updates activity for mentioned topics |
 | `system_prompt_block()` | Short description of the memory system |
-| `get_tool_schemas()` | Returns `curve_memory_search` tool in OpenAI function-calling format |
-| `handle_tool_call()` | Executes `curve_memory_search` tool calls |
+| `get_tool_schemas()` | Returns 4 tools in OpenAI function-calling format (see below) |
+| `handle_tool_call()` | Executes tool calls for all 4 tools |
 | `get_config_schema()` | Config schema for `hermes memory setup` |
 | `save_config(values, hermes_home)` | Save config from schema values |
 | `on_session_end(messages)` | Lazy archive sweep on session end |
 | `shutdown()` | Clean up resources |
+
+## Tools
+
+The plugin exposes 4 tools the agent can call:
+
+| Tool | Purpose | Key parameters |
+|------|---------|----------------|
+| `curve_memory_search` | Hybrid search across persistent memories | `query` (str), `top_k` (int, default 5) |
+| `curve_memory_user_get` | Get all stored user profile entries | — |
+| `curve_memory_user_set` | Store a user fact (persists across sessions) | `key` (str), `value` (str) |
+| `curve_memory_user_delete` | Remove a user fact | `key` (str) |
+
+### User Profile
+
+User profile data is stored in `{hermes_home}/memories/USER.md` as natural language text. It's injected into the system prompt via `system_prompt_block()` and can be queried via `prefetch()` (matched against query keywords).
+
+The file has two sections:
+- **Manual section** (top): free-form natural language — edit directly
+- **## Auto section** (bottom): tool-generated entries — managed by `curve_memory_user_set`/`delete`
 
 ## Roadmap
 
