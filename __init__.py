@@ -4,8 +4,10 @@ Curve-memory plugin — 遗忘曲线记忆系统
 基于 R(t) = 0.462 + 0.538 · exp(-t/2.71) 的遗忘曲线，
 提供三路混合检索（BM25 + Embedding + R(t)）和双层归档。
 
-安装：hermes plugins install git@github.com:sin1111yi/curve-memory.git
-配置：hermes config set memory.plugin curve-memory
+安装：hermes plugins install https://github.com/sin1111yi/curve-memory.git
+初始化：hermes curve-memory setup
+配置：hermes curve-memory config --interactive
+启用：hermes config set memory.plugin curve-memory && hermes gateway restart
 """
 
 from __future__ import annotations

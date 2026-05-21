@@ -252,7 +252,7 @@ def cmd_check(args):
 
 
 def cmd_setup(args):
-    """初始化：复制 cron 脚本、注册定时任务、检查目录结构"""
+    """初始化：目录结构、cron 脚本、定时任务、交互式配置"""
     import os, json, shutil
     from pathlib import Path
 
@@ -319,7 +319,17 @@ def cmd_setup(args):
     except Exception:
         print("  ⚠️  Ollama not detected")
 
-    print("Setup complete.")
+    # 4. 交互式配置
+    print("\n── 配置向导 ──")
+    try:
+        _interactive_config()
+    except Exception as e:
+        print(f"  ⚠️  配置向导失败: {e}")
+        print("     稍后可手动运行: hermes curve-memory config --interactive")
+
+    print("\n✅ Setup complete.")
+    print("   下一步: hermes config set memory.plugin curve-memory")
+    print("           hermes gateway restart")
 
 
 def cmd_uninstall(args):
@@ -654,7 +664,7 @@ def _interactive_config():
     lines[section_start:section_end] = section_lines
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n✅ 配置已更新")
-    print("   查看: python3 cli.py config")
+    print("   查看: hermes curve-memory config")
     print("   重启: hermes gateway restart")
 
 
@@ -665,7 +675,7 @@ def cmd_deactivate(args):
         subprocess.run(["hermes", "config", "unset", "memory.plugin"],
                        capture_output=True, timeout=10)
         print("✅ curve-memory 已停用（数据已保留）")
-        print("   启用: curve-memory activate")
+        print("   启用: hermes curve-memory activate")
     except Exception as e:
         print(f"⚠️  {e}")
         print("   手动: hermes config unset memory.plugin")
@@ -705,7 +715,7 @@ def cmd_undo(args):
         tstr = datetime.fromtimestamp(ts).strftime("%H:%M")
         print(f"  [{i}] {tstr} {op['op']:8s} {op['topic']}")
 
-    print("\n撤销: curve-memory touch <topic> 或 curve-memory recover <topic>")
+    print("\n撤销: hermes curve-memory touch <topic> 或 hermes curve-memory recover <topic>")
 
 
 def cmd_stats(args):
@@ -922,7 +932,7 @@ def register_subcommands(sub):
     p_check = sub.add_parser("check", help="健康检查")
     p_check.set_defaults(func=cmd_check)
 
-    p_setup = sub.add_parser("setup", help="创建 cron 脚本软链接")
+    p_setup = sub.add_parser("setup", help="初始化：目录、cron、交互式配置")
     p_setup.set_defaults(func=cmd_setup)
 
     p_uninstall = sub.add_parser("uninstall", help="卸载：清除软链接、cron、数据")

@@ -3,7 +3,7 @@
 ## Quick Start
 
 ```bash
-# 1. Setup cron scripts, dirs, register cron jobs
+# 1. One-step setup: create dirs, register cron jobs, interactive config
 hermes curve-memory setup
 
 # 2. Verify
@@ -17,15 +17,16 @@ hermes curve-memory status
 ollama pull qwen3-embedding:8b
 ```
 
-## 2. Setup cron scripts + register cron jobs
+## 2. Setup + configure
 
 ```bash
 hermes curve-memory setup
 ```
 
-This creates:
-- `~/.hermes/scripts/curve-memory-forgetting.py` (daily decay at 03:00)
-- `~/.hermes/scripts/curve-memory-indexer.py` (daily index at 03:45)
+This walks you through:
+- Directory creation (`~/.hermes/memories/active`, `archive/`, etc.)
+- Cron script deployment (`~/.hermes/scripts/curve-memory-forgetting.py` at 03:00, `curve-memory-indexer.py` at 03:45)
+- Interactive configuration (embedding model, search weights, archive thresholds)
 
 ## 3. Enable memory plugin
 
@@ -51,7 +52,7 @@ hermes curve-memory search "test"
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `cli.py: command not found` | Plugin not installed | `hermes plugins install https://github.com/sin1111yi/curve-memory.git` |
+| `command not found: hermes curve-memory` | Plugin not installed or not loaded | `hermes plugins install https://github.com/sin1111yi/curve-memory.git && hermes gateway restart` |
 | `Ollama connection refused` | Ollama not running | `ollama serve` or check Ollama installation |
 | `index --rebuild` fails | Embedding model not found | `ollama pull qwen3-embedding:8b` |
 | Search returns 0 results | Index not built | `hermes curve-memory index --rebuild` |
