@@ -265,13 +265,15 @@ def cmd_setup(args):
         ("curve-memory-forgetting.py", "forgetting.py"),
         ("curve-memory-indexer.py", "indexer.py"),
     ]
-    for link_name, target in links:
-        link_path = scripts_dir / link_name
-        target_path = plugin_core / target
-        if link_path.exists() or link_path.is_symlink():
-            link_path.unlink()
-        os.symlink(str(target_path), str(link_path))
-        print(f"  ✅ Symlink: {link_name}")
+    # 1. 复制 cron 脚本
+    for name, target in links:
+        dest = scripts_dir / name
+        src = plugin_core / target
+        if dest.exists() or dest.is_symlink():
+            dest.unlink()
+        import shutil
+        shutil.copy2(str(src), str(dest))
+        print(f"  ✅ Copied: {name}")
 
     # 2. 恢复 cron 任务
     cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
@@ -311,12 +313,12 @@ def cmd_uninstall(args):
 
     print("=== Uninstalling curve-memory ===")
 
-    # 1. 删除软链接
+    # 1. 删除 cron 脚本
     for name in ["curve-memory-forgetting.py", "curve-memory-indexer.py"]:
         p = scripts_dir / name
-        if p.is_symlink() or p.exists():
+        if p.exists():
             p.unlink()
-            print(f"  ✅ Removed symlink: {name}")
+            print(f"  ✅ Removed: {name}")
 
     # 2. 删除 cron 任务
     cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
@@ -347,6 +349,99 @@ def cmd_uninstall(args):
         print("  ℹ️  Memory data preserved (use --all to also clear data)")
 
     print("Done. You can now run: hermes plugins remove curve-memory")
+
+
+def cmd_install_wizard(args):
+    """交互式安装向导：检查依赖、初始化、配置"""
+    import subprocess, json, shutil
+    ok, ng, warn = "✅", "❌", "⚠️"
+    print("=== Curve Memory 安装向导 ===\n")
+
+    # 1. 检查 Ollama
+    print("1️⃣ 检查 Ollama... ", end="", flush=True)
+    try:
+        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            print(f"{ok} ollama 运行中")
+        else:
+            print(f"{ng} ollama 未运行 (ollama serve)")
+    except FileNotFoundError:
+        print(f"{ng} Ollama 未安装")
+    except Exception as e:
+        print(f"{ng} {e}")
+
+    # 2. 检查嵌入模型
+    print("2️⃣ 检查 qwen3-embedding:8b... ", end="", flush=True)
+    try:
+        r = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
+        if "qwen3-embedding" in r.stdout:
+            print(f"{ok} 已安装")
+        else:
+            print(f"{warn} 未找到，执行 pull...")
+            r2 = subprocess.run(["ollama", "pull", "qwen3-embedding:8b"], timeout=300)
+            print(f"   → {'✅ 完成' if r2.returncode == 0 else '❌ 失败'}")
+    except Exception as e:
+        print(f"{ng} {e}")
+
+    # 3. 检查 numpy
+    print("3️⃣ 检查 numpy... ", end="", flush=True)
+    try:
+        import numpy
+        print(f"{ok} {numpy.__version__}")
+    except ImportError:
+        print(f"{warn} 未安装 (pip install numpy)")
+
+    # 4. 创建目录 + 复制脚本
+    print("4️⃣ 初始化目录结构... ", end="", flush=True)
+    plugin_core = Path.home() / ".hermes" / "plugins" / "curve-memory" / "curve_memory" / "core"
+    scripts_dir = Path.home() / ".hermes" / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    for name in ["curve-memory-forgetting.py", "curve-memory-indexer.py"]:
+        src = plugin_core / ("forgetting.py" if "forgetting" in name else "indexer.py")
+        dst = scripts_dir / name
+        shutil.copy2(str(src), str(dst))
+    print(f"{ok}")
+
+    # 5. cron 注册
+    print("5️⃣ 检查 cron 任务... ", end="", flush=True)
+    cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
+    if cron_file.exists():
+        data = json.loads(cron_file.read_text())
+        existing = {j.get("name") for j in data.get("jobs", [])}
+        new = []
+        for jname, script, sched in [
+            ("snowlyn-memory-decay", "curve-memory-forgetting.py", "0 3 * * *"),
+            ("snowlyn-memory-index", "curve-memory-indexer.py", "45 3 * * *"),
+        ]:
+            if jname not in existing:
+                new.append(jname)
+        if new:
+            print(f"{warn} 需手动注册: {', '.join(new)}")
+            print(f"   运行: curve-memory setup")
+        else:
+            print(f"{ok} 已注册")
+    else:
+        print(f"{warn} cron 系统未就绪")
+
+    # 6. 配置检查
+    print("6️⃣ 检查 memory.plugin 配置... ", end="", flush=True)
+    config_path = Path.home() / ".hermes" / "config.yaml"
+    if config_path.exists():
+        raw = config_path.read_text()
+        if "memory.plugin" in raw or "memory:" in raw:
+            print(f"{ok}")
+        else:
+            print(f"{warn} 未设置 → hermes config set memory.plugin curve-memory")
+
+    # 7. 索引检查
+    print("7️⃣ 检查索引状态... ", end="", flush=True)
+    emb_dir = Path.home() / ".hermes" / "memories" / ".embedding_index"
+    if emb_dir.exists() and any(emb_dir.iterdir()):
+        print(f"{ok} 有 {len(list(emb_dir.glob('*.jsonl')))} 个嵌入文件")
+    else:
+        print(f"{warn} 索引为空 → curve-memory index --rebuild")
+
+    print("\n✅ 检查完成。按上述 ⚠️ 提示操作即可。")
 
 
 def main():
@@ -401,6 +496,10 @@ def main():
     p_uninstall = sub.add_parser("uninstall", help="卸载：清除软链接、cron、数据")
     p_uninstall.add_argument("--all", action="store_true", help="同时清除记忆数据")
     p_uninstall.set_defaults(func=cmd_uninstall)
+
+    # install-wizard
+    p_wizard = sub.add_parser("install-wizard", help="安装向导：检查依赖并初始化")
+    p_wizard.set_defaults(func=cmd_install_wizard)
 
     args = parser.parse_args()
     if hasattr(args, "func"):
