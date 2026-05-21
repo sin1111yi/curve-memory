@@ -229,18 +229,18 @@ curve-memory search "R(t) formula"
 ## CLI Reference
 
 ```bash
-# 三路混合检索
+# Three-way hybrid search
 curve-memory search <query>              Three-way hybrid search
 curve-memory search <query> --json       JSON output (machine-readable)
 
-# 系统状态
+# System status
 curve-memory status                      TIER distribution + index health
 curve-memory stats                       Detailed statistics (avg R(t), TIER dist, index size)
 curve-memory config                      View current configuration
 curve-memory check                       Full health check (6 items)
 curve-memory plot                        ASCII visualization of R(t) curve
 
-# 记忆管理
+# Memory management
 curve-memory touch <topic>               Reset t=0, increment access_count
 curve-memory forget <topic>              Manual archive
 curve-memory mature <topic>              Mark topic as mature
@@ -248,13 +248,13 @@ curve-memory recover <topic>             Restore from archive/
 curve-memory recover --list              List archivable topics
 curve-memory undo                        Show recent operations
 
-# 索引
+# Index
 curve-memory index --rebuild             Full reindex all memories
 curve-memory index --incremental         Incremental update (by mtime)
 curve-memory repair                      Diagnose and fix common issues
 curve-memory repair --fix                Auto-fix issues
 
-# 生命周期
+# Lifecycle
 curve-memory setup                       Initialize: copy cron scripts, register jobs, check model
 curve-memory install-wizard              Interactive installation guide (7 checks)
 curve-memory activate                    Re-enable memory plugin
