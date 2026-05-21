@@ -305,3 +305,4 @@ curve-memory check                   # Full health check
 ## License
 
 MIT
+- [ralqlator](tools/ralqlator) — 命令行计算器，用于 R(t) 公式验证和数学计算

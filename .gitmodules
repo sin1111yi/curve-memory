@@ -1,0 +1,3 @@
+[submodule "tools/ralqlator"]
+	path = tools/ralqlator
+	url = https://github.com/sin1111yi/ralqlator.git

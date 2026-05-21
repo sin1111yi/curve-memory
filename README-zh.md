@@ -305,3 +305,4 @@ curve-memory check                    # 全面健康检查
 ## 许可
 
 MIT
+- [ralqlator](tools/ralqlator) — CLI calculator for R(t) formula verification and math computation
