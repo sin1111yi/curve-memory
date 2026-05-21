@@ -199,64 +199,91 @@ pip install numpy
 ### Plugin Installation
 
 ```bash
-# Install from GitHub
+# 1. Install from GitHub
 hermes plugins install git@github.com:sin1111yi/curve-memory.git
 
-# Enable and configure
+# 2. Enable and configure
 hermes plugins enable curve-memory
 hermes config set memory.plugin curve-memory
 
-# Setup: copy cron scripts, create directory structure, register cron jobs, check model
-curve-memory setup
+# 3. Setup: copy cron scripts, create directory structure, register cron jobs
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py setup
 
-# Initialize the index
-curve-memory index --rebuild
+# 4. Initialize the index
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py index --rebuild
 
-# Restart the gateway
+# 5. Restart the gateway
 hermes gateway restart
 
-# Verify
-curve-memory check
+# 6. Verify
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py check
 ```
 
 ## CLI Reference
 
+All commands use the plugin's CLI script:
+
 ```bash
-# Three-way hybrid search
-curve-memory search <query>              Three-way hybrid search
-curve-memory search <query> --json       JSON output (machine-readable)
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py <command> [args]
+```
 
-# System status
-curve-memory status                      TIER distribution + index health
-curve-memory stats                       Detailed statistics (avg R(t), TIER dist, index size)
-curve-memory config                      View current configuration
-curve-memory check                       Full health check (6 items)
-curve-memory plot                        ASCII visualization of R(t) curve
+Or from the plugin directory:
 
-# Memory management
-curve-memory touch <topic>               Reset t=0, increment access_count
-curve-memory forget <topic>              Manual archive
-curve-memory mature <topic>              Mark topic as mature
-curve-memory recover <topic>             Restore from archive/
-curve-memory recover --list              List archivable topics
-curve-memory undo                        Show recent operations
+```bash
+cd ~/.hermes/plugins/curve-memory/curve_memory
+python3 cli.py <command> [args]
+```
 
-# Index
-curve-memory index --rebuild             Full reindex all memories
-curve-memory index --incremental         Incremental update (by mtime)
-curve-memory repair                      Diagnose and fix common issues
-curve-memory repair --fix                Auto-fix issues
+### Search
 
-# Lifecycle
-curve-memory setup                       Initialize: copy cron scripts, register jobs, check model
-curve-memory install-wizard              Interactive installation guide (7 checks)
-curve-memory activate                    Re-enable memory plugin
-curve-memory deactivate                  Disable (preserve data)
-curve-memory uninstall [--all] [-y]      Clean up: cron, config, optional data
-curve-memory export [file.tar.gz]        Export all memory data
+```bash
+python3 cli.py search "borrow checker"         # Three-way search
+python3 cli.py search "R(t) formula" --json     # JSON output
+```
+
+### System Status
+
+```bash
+python3 cli.py status          # TIER distribution + index health
+python3 cli.py stats           # Detailed statistics
+python3 cli.py config          # View configuration
+python3 cli.py check           # Health check (6 items)
+python3 cli.py plot            # ASCII R(t) curve
+```
+
+### Memory Management
+
+```bash
+python3 cli.py touch <topic>         # Reset t=0
+python3 cli.py forget <topic>        # Manual archive
+python3 cli.py mature <topic>        # Mark as mature
+python3 cli.py recover <topic>       # Restore from archive
+python3 cli.py recover --list        # List recoverable topics
+python3 cli.py undo                  # Show recent ops
+```
+
+### Index
+
+```bash
+python3 cli.py index --rebuild       # Full reindex
+python3 cli.py index --incremental   # Incremental update
+python3 cli.py repair                # Diagnose issues
+python3 cli.py repair --fix          # Auto-fix
+```
+
+### Lifecycle
+
+```bash
+python3 cli.py setup              # Initialize after install
+python3 cli.py install-wizard     # Interactive wizard
+python3 cli.py activate           # Re-enable
+python3 cli.py deactivate         # Disable (preserve data)
+python3 cli.py uninstall [-y]     # Clean up
+python3 cli.py uninstall --all    # Clean up + erase all data
+python3 cli.py export backup.tar.gz  # Export memories
 
 # Daily
-curve-memory daily-tick                  Manual trigger daily decay
+python3 cli.py daily-tick         # Manual decay trigger
 ```
 
 ## Related Projects

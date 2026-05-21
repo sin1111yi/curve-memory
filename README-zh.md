@@ -199,64 +199,91 @@ pip install numpy
 ### 插件安装
 
 ```bash
-# 从 GitHub 安装
+# 1. 从 GitHub 安装
 hermes plugins install git@github.com:sin1111yi/curve-memory.git
 
-# 启用并配置
+# 2. 启用并配置
 hermes plugins enable curve-memory
 hermes config set memory.plugin curve-memory
 
-# 初始化：复制 cron 脚本、创建目录、注册定时任务、检查模型
-curve-memory setup
+# 3. 初始化：复制 cron 脚本、创建目录、注册定时任务
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py setup
 
-# 初始化索引
-curve-memory index --rebuild
+# 4. 初始化索引
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py index --rebuild
 
-# 重启 gateway
+# 5. 重启 gateway
 hermes gateway restart
 
-# 验证
-curve-memory check
+# 6. 验证
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py check
 ```
 
 ## CLI 参考
 
+所有命令使用插件的 CLI 脚本：
+
 ```bash
-# 三路混合检索
-curve-memory search <查询>                 三路混合检索
-curve-memory search <查询> --json           JSON 输出（机器可读）
+python3 ~/.hermes/plugins/curve-memory/curve_memory/cli.py <命令> [参数]
+```
 
-# 系统状态
-curve-memory status                        TIER 分布 + 索引健康
-curve-memory stats                         详细统计（平均 R(t)、TIER、索引大小）
-curve-memory config                        查看当前配置
-curve-memory check                         全面健康检查（6 项）
-curve-memory plot                          显示 R(t) 曲线 ASCII 图
+或在插件目录下：
 
-# 记忆管理
-curve-memory touch <主题>                   重置 t=0，增加访问计数
-curve-memory forget <主题>                  手动归档
-curve-memory mature <主题>                  标记为成熟
-curve-memory recover <主题>                 从 archive 恢复
-curve-memory recover --list                 列出可恢复的主题
-curve-memory undo                           显示最近操作
+```bash
+cd ~/.hermes/plugins/curve-memory/curve_memory
+python3 cli.py <命令> [参数]
+```
 
-# 索引
-curve-memory index --rebuild                全量重建索引
-curve-memory index --incremental            增量更新（按 mtime）
-curve-memory repair                         诊断并修复常见问题
-curve-memory repair --fix                   自动修复
+### 检索
 
-# 生命周期
-curve-memory setup                          初始化：复制 cron 脚本、注册任务、检查模型
-curve-memory install-wizard                 交互式安装向导（7 项检查）
-curve-memory activate                       重新启用
-curve-memory deactivate                     停用（保留数据）
-curve-memory uninstall [--all] [-y]         卸载：清理 cron、配置、可选数据
-curve-memory export [文件.tar.gz]           导出所有记忆数据
+```bash
+python3 cli.py search "借用检查器"           # 三路检索
+python3 cli.py search "R(t) 公式" --json     # JSON 输出
+```
+
+### 系统状态
+
+```bash
+python3 cli.py status         # TIER 分布 + 索引健康
+python3 cli.py stats          # 详细统计
+python3 cli.py config         # 查看配置
+python3 cli.py check          # 健康检查（6 项）
+python3 cli.py plot           # R(t) 曲线 ASCII 图
+```
+
+### 记忆管理
+
+```bash
+python3 cli.py touch <主题>         # 重置 t=0
+python3 cli.py forget <主题>        # 手动归档
+python3 cli.py mature <主题>        # 标记成熟
+python3 cli.py recover <主题>       # 恢复归档
+python3 cli.py recover --list       # 列出可恢复
+python3 cli.py undo                 # 最近操作
+```
+
+### 索引
+
+```bash
+python3 cli.py index --rebuild      # 全量重建
+python3 cli.py index --incremental  # 增量更新
+python3 cli.py repair               # 诊断问题
+python3 cli.py repair --fix         # 自动修复
+```
+
+### 生命周期
+
+```bash
+python3 cli.py setup             # 安装后初始化
+python3 cli.py install-wizard    # 交互式向导
+python3 cli.py activate          # 重新启用
+python3 cli.py deactivate        # 停用（保留数据）
+python3 cli.py uninstall [-y]    # 卸载
+python3 cli.py uninstall --all   # 卸载 + 清除数据
+python3 cli.py export backup.tar.gz  # 导出
 
 # 每日
-curve-memory daily-tick                     手动触发每日衰减
+python3 cli.py daily-tick        # 手动衰减
 ```
 
 ## 相关项目
