@@ -106,26 +106,28 @@ Frequently-used memories are promoted to permanent knowledge documents instead o
 │  MemoryProvider: curve-memory                        │
 │    ├─ prefetch(query) → 3-way search → TIER inject   │
 │    ├─ sync_turn()    → auto-touch mentioned topics   │
-│    └─ get_tool_schemas() → curve_memory_search tool  │
+│    ├─ get_tool_schemas() → curve_memory_search tool  │
+│    └─ get_config_schema() / save_config()            │
 │                                                      │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
 │  Core Engine (curve_memory/core/)                    │
 │                                                      │
-│  tier.py             R(t) formula + TIER mapping     │
-│  search.py           BM25 + Embedding + R(t) fusion  │
-│  activity.py         ACTIVITY.yaml read/write        │
-│  chunker.py          Markdown H2 section splitting   │
-│  embedding_provider  Ollama qwen3-embedding:8b       │
-│  forgetting.py       Daily decay cron                │
-│  indexer.py          FTS5 + embedding index builder  │
+│  tier.py        R(t) formula + TIER mapping          │
+│  search.py      BM25 + Embedding + R(t) fusion       │
+│  activity.py    ACTIVITY.yaml read/write             │
+│  embedding.py   ABC EmbeddingProvider + factory       │
+│  config.py      get_config_schema, load/save config   │
+│  chunker.py     Markdown H2 section splitting         │
+│                                                      │
+│  backends/ollama.py   Ollama embedding client         │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
 │  Storage (~/.hermes/memories/)                       │
 │                                                      │
-│  ACTIVITY.yaml       t, access_count, mature flags   │
+│  ACTIVITY.yaml       t (Unix timestamp), access_...  │
 │  MEMORY.md           idx:topic [t=N] → active/       │
 │  active/*.md         Live memory files               │
 │  .embedding_index/   Per-topic JSONL vector index    │
@@ -140,8 +142,8 @@ Frequently-used memories are promoted to permanent knowledge documents instead o
 ### Write Path
 ```
 agent writes active/<topic>.md
-  → indexer detects mtime change
-  → chunk by H2 sections
+  → CLI index detects mtime change
+  → chunk by content (tier-adaptive sizing)
   → embed via Ollama qwen3-embedding:8b
   → write .embedding_index/<topic>.jsonl
   → update FTS5 index
@@ -157,19 +159,48 @@ user message → agent
   → inject into system prompt
 ```
 
-### Cron Path (daily)
+### Archive Sweep (lazy, at initialize/on_session_end)
 ```
-03:00 — curve-memory-forgetting.py:
-  → all memories t += 1
-  → compute R(t), detect maturity
-  → archive if t ≥ 30 (forgotten or mature)
+initialize() / on_session_end():
+  → scan active memories
+  → compute R(t) from Unix timestamps (no day-counter)
+  → detect maturity (access_count ≥ 20 AND t ≤ 3 days)
+  → archive if t ≥ archive_threshold_days
+    → mature → copy to archive/mature/ + promote to knowledge/
+    → forgotten → move to archive/forgotten/
   → update ACTIVITY.yaml
-
-03:45 — curve-memory-indexer.py --incremental:
-  → scan active/ for mtime changes
-  → re-chunk + re-embed changed files
-  → clean stale indexes (archived topics)
 ```
+
+### No cron
+The old cron scripts (`curve-memory-forgetting.py`, `curve-memory-indexer.py`) have been removed.
+- R(t) is computed from Unix timestamps at query time — no day-counter increment needed.
+- Archive sweep happens lazily in `initialize()` and `on_session_end()`.
+
+## Config
+
+Stored in `{hermes_home}/curve-memory-config.json` (JSON format, not config.yaml).
+
+| Key | Description | Default |
+|-----|-------------|---------|
+| `model` | Ollama embedding model name | `qwen3-embedding:8b` |
+| `base_url` | Ollama server URL | `http://localhost:11434` |
+| `search_alpha` | BM25 weight (0-1) | `0.35` |
+| `search_beta` | Embedding weight (0-1) | `0.45` |
+| `search_gamma` | Recency weight (0-1) | `0.20` |
+| `archive_days` | Days before archiving (0 = never) | `30` |
+
+Configure via:
+```bash
+hermes curve-memory config --interactive
+```
+
+Or via environment variables:
+- `CURVE_MEMORY_EMBEDDING_MODEL`
+- `CURVE_MEMORY_EMBEDDING_URL`
+- `CURVE_MEMORY_ALPHA`
+- `CURVE_MEMORY_BETA`
+- `CURVE_MEMORY_GAMMA`
+- `CURVE_MEMORY_ARCHIVE_DAYS`
 
 ## Performance
 
@@ -191,9 +222,6 @@ Estimated index size for 500 memories: < 10 MB (embeddings) + < 5 MB (FTS5).
 ```bash
 # Install Ollama and pull the embedding model
 ollama pull qwen3-embedding:8b
-
-# Python dependency (for cosine similarity)
-pip install numpy
 ```
 
 ### Plugin Installation
@@ -202,21 +230,24 @@ pip install numpy
 # 1. Install from GitHub
 hermes plugins install https://github.com/sin1111yi/curve-memory.git
 
-# 2. Enable and setup (dirs, cron, interactive config)
+# 2. Enable the plugin
 hermes plugins enable curve-memory
-hermes curve-memory setup
 
-# 3. Enable memory plugin
-hermes config set memory.plugin curve-memory
+# 3. Interactive configuration (model, search weights, archive threshold)
+hermes curve-memory config --interactive
 
-# 4. Build index
+# 4. Enable memory provider
+hermes config set memory.provider curve-memory
+
+# 5. Rebuild the index
 hermes curve-memory index --rebuild
 
-# 5. Restart the gateway
+# 6. Restart the gateway
 hermes gateway restart
 
-# 6. Verify
+# 7. Verify
 hermes curve-memory check
+hermes curve-memory status
 ```
 
 ## CLI Reference
@@ -226,6 +257,18 @@ All commands are available as Hermes subcommands:
 ```bash
 hermes curve-memory <command> [args]
 ```
+
+### 7 Commands
+
+| Command | Description | Flags |
+|---------|-------------|-------|
+| `search <query>` | Three-way hybrid search | `--json`, `--top-k N` |
+| `status` | System status + TIER distribution | — |
+| `config` | View or configure | `--interactive` (config wizard) |
+| `check` | Health check (5 items) | — |
+| `activate` | Re-enable curve-memory provider | — |
+| `deactivate` | Disable (preserve data) | — |
+| `index` | Build/rebuild index | `--rebuild` (full rebuild) |
 
 ### Search
 
@@ -238,45 +281,29 @@ hermes curve-memory search "R(t) formula" --json     # JSON output
 
 ```bash
 hermes curve-memory status          # TIER distribution + index health
-hermes curve-memory stats           # Detailed statistics
 hermes curve-memory config          # View configuration
-hermes curve-memory check           # Health check (6 items)
-hermes curve-memory plot            # ASCII R(t) curve
+hermes curve-memory check           # Health check (5 items)
 ```
 
-### Memory Management
+### Configuration
 
 ```bash
-hermes curve-memory touch <topic>         # Reset t=0
-hermes curve-memory forget <topic>        # Manual archive
-hermes curve-memory mature <topic>        # Mark as mature
-hermes curve-memory recover <topic>       # Restore from archive
-hermes curve-memory recover --list        # List recoverable topics
-hermes curve-memory undo                  # Show recent ops
+hermes curve-memory config                          # View current config
+hermes curve-memory config --interactive            # Interactive config wizard
+```
+
+### Activation
+
+```bash
+hermes curve-memory activate         # Re-enable (sets memory.provider)
+hermes curve-memory deactivate       # Disable (preserves all data)
 ```
 
 ### Index
 
 ```bash
-hermes curve-memory index --rebuild       # Full reindex
-hermes curve-memory index --incremental   # Incremental update
-hermes curve-memory repair                # Diagnose issues
-hermes curve-memory repair --fix          # Auto-fix
-```
-
-### Lifecycle
-
-```bash
-hermes curve-memory setup              # Initialize after install
-hermes curve-memory install-wizard     # Interactive wizard
-hermes curve-memory activate           # Re-enable
-hermes curve-memory deactivate         # Disable (preserve data)
-hermes curve-memory uninstall [-y]     # Clean up
-hermes curve-memory uninstall --all    # Clean up + erase all data
-hermes curve-memory export backup.tar.gz  # Export memories
-
-# Daily
-hermes curve-memory daily-tick         # Manual decay trigger
+hermes curve-memory index            # Incremental index update
+hermes curve-memory index --rebuild  # Full rebuild from scratch
 ```
 
 ## Related Projects
@@ -294,16 +321,18 @@ hermes curve-memory daily-tick         # Manual decay trigger
 └── curve_memory/
     ├── __init__.py               # Package marker
     ├── provider.py               # MemoryProvider implementation
-    ├── cli.py                    # CLI tool
+    ├── cli.py                    # CLI tool (7 commands)
     ├── core/
     │   ├── __init__.py
     │   ├── tier.py               # R(t) engine + TIER mapping
     │   ├── search.py             # Three-way hybrid search
     │   ├── activity.py           # ACTIVITY.yaml read/write
-    │   ├── chunker.py            # H2 section chunking
-    │   ├── embedding_provider.py # Ollama embedding wrapper
-    │   ├── forgetting.py         # Daily decay cron script
-    │   └── indexer.py            # FTS5 + embedding index builder
+    │   ├── embedding.py          # ABC EmbeddingProvider + factory
+    │   ├── config.py             # Config schema, load/save config
+    │   └── chunker.py            # H2 section chunking
+    ├── backends/
+    │   ├── __init__.py
+    │   └── ollama.py             # Ollama embedding client
     └── skill/
         └── SKILL.md              # Agent protocol document
 ```
@@ -312,15 +341,15 @@ hermes curve-memory daily-tick         # Manual decay trigger
 
 ```
 ~/.hermes/memories/
-├── ACTIVITY.yaml              # t, access_count, mature, protected flags
+├── ACTIVITY.yaml              # t (timestamp), access_count, mature, protected flags
 ├── MEMORY.md                  # idx:topic [t=N] → active/topic.md
-├── active/                    # Live memory files (13 files)
+├── active/                    # Live memory files
 ├── .embedding_index/          # Per-topic JSONL vector index (768-4096d)
 ├── .fts5/curve_memory_fts5.db # SQLite FTS5 full-text index
 ├── archive/
 │   ├── forgotten/             # Cold storage (recoverable)
 │   └── mature/                # Permanent knowledge snapshots
-└── FORGET_LOG.md              # Archive event log
+└── curve-memory-config.json   # Plugin configuration
 ```
 
 ## Design Decisions
@@ -332,19 +361,38 @@ hermes curve-memory daily-tick         # Manual decay trigger
 | **Ollama over sentence-transformers** | Zero Python ML deps, standalone service, multi-model support |
 | **YAML over SQLite for activity** | Human-readable, script-friendly, agent-editable |
 | **Dual archive over single** | Frequently-used memories deserve promotion, not deletion |
-| **File lock over DB transactions** | Simple, adequate for single-user cron conflicts |
-| **Importlib for hyphenated scripts** | Maintains backward compat with ~/.hermes/scripts/ usage |
+| **Timestamp-based R(t) over cron** | No cron dependency, computed at query time from Unix timestamps |
+| **Lazy archive sweep over daily cron** | Archive happens on initialize/end-session, not via scheduled scripts |
+| **JSON config over YAML section** | Self-contained, compatible with `get_config_schema()` / `save_config()` |
+| **`memory.provider` over `memory.plugin`** | Standard ABC MemoryProvider interface |
+
+## MemoryProvider Implementation
+
+The plugin implements the full `MemoryProvider` abstract base class:
+
+| Method | Purpose |
+|--------|---------|
+| `initialize()` | Create resources, load config, init embedder, run lazy archive sweep |
+| `prefetch(query)` | Called before each turn — injects up to 3 relevant memories |
+| `sync_turn(user, asst)` | Called after each turn — updates activity for mentioned topics |
+| `system_prompt_block()` | Short description of the memory system |
+| `get_tool_schemas()` | Returns `curve_memory_search` tool in OpenAI function-calling format |
+| `handle_tool_call()` | Executes `curve_memory_search` tool calls |
+| `get_config_schema()` | Config schema for `hermes memory setup` |
+| `save_config(values, hermes_home)` | Save config from schema values |
+| `on_session_end(messages)` | Lazy archive sweep on session end |
+| `shutdown()` | Clean up resources |
 
 ## Roadmap
 
 - [x] Phase 0: Preparation & backup
-- [x] Phase 1: Forgetting curve core (R(t), TIER, cron decay)
+- [x] Phase 1: Forgetting curve core (R(t), TIER, decay)
 - [x] Phase 2: Semantic search (FTS5 + Embedding + R(t) fusion)
 - [x] Phase 3: Hermes Plugin packaging & CLI
 - [x] Phase 4: Integration & end-to-end verification
-- [ ] Phase 5: Long-term tuning (α/β/γ weights, TIER thresholds, maturity params)
+- [x] Phase 5: MemoryProvider ABC refactoring
+- [ ] Phase 6: Long-term tuning (α/β/γ weights, TIER thresholds, maturity params)
 
 ## License
 
 MIT
-- [ralqlator](tools/ralqlator) — 命令行计算器，用于 R(t) 公式验证和数学计算

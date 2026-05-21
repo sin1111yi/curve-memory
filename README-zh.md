@@ -106,26 +106,28 @@ t ≥ 30 天 → mv active/*.md → archive/forgotten/
 │  MemoryProvider: curve-memory                        │
 │    ├─ prefetch(query) → 三路检索 → TIER 注入         │
 │    ├─ sync_turn()    → 自动 touch 提到的主题          │
-│    └─ get_tool_schemas() → curve_memory_search 工具   │
+│    ├─ get_tool_schemas() → curve_memory_search 工具   │
+│    └─ get_config_schema() / save_config()            │
 │                                                      │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
 │  核心引擎 (curve_memory/core/)                        │
 │                                                      │
-│  tier.py             R(t) 公式 + TIER 映射            │
-│  search.py           BM25 + Embedding + R(t) 融合     │
-│  activity.py         ACTIVITY.yaml 读写               │
-│  chunker.py          Markdown H2 章节分割             │
-│  embedding_provider  Ollama qwen3-embedding:8b       │
-│  forgetting.py       每日衰减 cron                    │
-│  indexer.py          FTS5 + embedding 索引构建器       │
+│  tier.py         R(t) 公式 + TIER 映射                │
+│  search.py       BM25 + Embedding + R(t) 融合          │
+│  activity.py     ACTIVITY.yaml 读写                   │
+│  embedding.py    ABC EmbeddingProvider + 工厂函数       │
+│  config.py       get_config_schema, 加载/保存配置       │
+│  chunker.py      Markdown H2 章节分割                  │
+│                                                      │
+│  backends/ollama.py   Ollama 嵌入客户端                 │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
 │  存储层 (~/.hermes/memories/)                         │
 │                                                      │
-│  ACTIVITY.yaml       t, access_count, mature 标志     │
+│  ACTIVITY.yaml       t (Unix 时间戳), access_count    │
 │  MEMORY.md           idx:topic [t=N] → active/       │
 │  active/*.md         活跃记忆文件                      │
 │  .embedding_index/   每个 topic 的 JSONL 向量索引      │
@@ -140,8 +142,8 @@ t ≥ 30 天 → mv active/*.md → archive/forgotten/
 ### 写入路径
 ```
 agent 写入 active/<topic>.md
-  → indexer 检测 mtime 变化
-  → 按 H2 章节分块
+  → CLI index 检测 mtime 变化
+  → 按内容分块（TIER 自适应大小）
   → 通过 Ollama qwen3-embedding:8b 嵌入
   → 写入 .embedding_index/<topic>.jsonl
   → 更新 FTS5 索引
@@ -157,19 +159,48 @@ agent 写入 active/<topic>.md
   → 注入 system prompt
 ```
 
-### Cron 路径（每日）
+### 惰性归档（initialize/on_session_end 时触发）
 ```
-03:00 — curve-memory-forgetting.py：
-  → 所有记忆 t += 1
-  → 计算 R(t)，检测成熟度
-  → 若 t ≥ 30 则归档（遗忘或成熟）
+initialize() / on_session_end():
+  → 扫描活跃记忆
+  → 从 Unix 时间戳计算 R(t)（无 day-counter）
+  → 检测成熟度（访问次数 ≥ 20 且 t ≤ 3 天）
+  → 若 t ≥ archive_threshold_days 则归档
+    → 成熟 → 复制到 archive/mature/ + 提升到 knowledge/
+    → 遗忘 → 移动到 archive/forgotten/
   → 更新 ACTIVITY.yaml
-
-03:45 — curve-memory-indexer.py --incremental：
-  → 扫描 active/ 的 mtime 变化
-  → 对变更文件重新分块 + 嵌入
-  → 清理过期索引（已归档主题）
 ```
+
+### 无 cron
+旧的 cron 脚本（`curve-memory-forgetting.py`、`curve-memory-indexer.py`）已移除。
+- R(t) 在查询时从 Unix 时间戳实时计算——无需 day-counter 递增。
+- 归档在 `initialize()` 和 `on_session_end()` 中惰性执行。
+
+## 配置
+
+存储在 `{hermes_home}/curve-memory-config.json`（JSON 格式，非 config.yaml）。
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `model` | Ollama 嵌入模型名称 | `qwen3-embedding:8b` |
+| `base_url` | Ollama 服务器地址 | `http://localhost:11434` |
+| `search_alpha` | BM25 权重 (0-1) | `0.35` |
+| `search_beta` | 语义嵌入权重 (0-1) | `0.45` |
+| `search_gamma` | 新鲜度权重 (0-1) | `0.20` |
+| `archive_days` | 归档前保留天数 (0=永不) | `30` |
+
+通过交互式向导配置：
+```bash
+hermes curve-memory config --interactive
+```
+
+或通过环境变量：
+- `CURVE_MEMORY_EMBEDDING_MODEL`
+- `CURVE_MEMORY_EMBEDDING_URL`
+- `CURVE_MEMORY_ALPHA`
+- `CURVE_MEMORY_BETA`
+- `CURVE_MEMORY_GAMMA`
+- `CURVE_MEMORY_ARCHIVE_DAYS`
 
 ## 性能
 
@@ -191,9 +222,6 @@ agent 写入 active/<topic>.md
 ```bash
 # 安装 Ollama 并拉取嵌入模型
 ollama pull qwen3-embedding:8b
-
-# Python 依赖（用于余弦相似度）
-pip install numpy
 ```
 
 ### 插件安装
@@ -202,21 +230,24 @@ pip install numpy
 # 1. 从 GitHub 安装
 hermes plugins install https://github.com/sin1111yi/curve-memory.git
 
-# 2. 启用并初始化（目录、cron、交互式配置）
+# 2. 启用插件
 hermes plugins enable curve-memory
-hermes curve-memory setup
 
-# 3. 启用记忆插件
-hermes config set memory.plugin curve-memory
+# 3. 交互式配置（模型、搜索权重、归档阈值）
+hermes curve-memory config --interactive
 
-# 4. 建索引
+# 4. 启用记忆提供者
+hermes config set memory.provider curve-memory
+
+# 5. 重建索引
 hermes curve-memory index --rebuild
 
-# 5. 重启 gateway
+# 6. 重启 gateway
 hermes gateway restart
 
-# 6. 验证
+# 7. 验证
 hermes curve-memory check
+hermes curve-memory status
 ```
 
 ## CLI 参考
@@ -226,6 +257,18 @@ hermes curve-memory check
 ```bash
 hermes curve-memory <命令> [参数]
 ```
+
+### 7 个命令
+
+| 命令 | 说明 | 参数 |
+|------|------|------|
+| `search <关键词>` | 三路混合检索 | `--json`, `--top-k N` |
+| `status` | 系统状态 + TIER 分布 | — |
+| `config` | 查看/配置 | `--interactive` (配置向导) |
+| `check` | 健康检查（5 项） | — |
+| `activate` | 重新激活 curve-memory | — |
+| `deactivate` | 停用（保留数据） | — |
+| `index` | 构建索引 | `--rebuild` (全量重建) |
 
 ### 检索
 
@@ -238,45 +281,29 @@ hermes curve-memory search "R(t) 公式" --json     # JSON 输出
 
 ```bash
 hermes curve-memory status         # TIER 分布 + 索引健康
-hermes curve-memory stats          # 详细统计
 hermes curve-memory config         # 查看配置
-hermes curve-memory check          # 健康检查（6 项）
-hermes curve-memory plot           # R(t) 曲线 ASCII 图
+hermes curve-memory check          # 健康检查（5 项）
 ```
 
-### 记忆管理
+### 配置
 
 ```bash
-hermes curve-memory touch <主题>         # 重置 t=0
-hermes curve-memory forget <主题>        # 手动归档
-hermes curve-memory mature <主题>        # 标记成熟
-hermes curve-memory recover <主题>       # 恢复归档
-hermes curve-memory recover --list       # 列出可恢复
-hermes curve-memory undo                 # 最近操作
+hermes curve-memory config                          # 查看当前配置
+hermes curve-memory config --interactive            # 交互式配置向导
+```
+
+### 激活/停用
+
+```bash
+hermes curve-memory activate         # 启用（设置 memory.provider）
+hermes curve-memory deactivate       # 停用（保留数据）
 ```
 
 ### 索引
 
 ```bash
-hermes curve-memory index --rebuild      # 全量重建
-hermes curve-memory index --incremental  # 增量更新
-hermes curve-memory repair               # 诊断问题
-hermes curve-memory repair --fix         # 自动修复
-```
-
-### 生命周期
-
-```bash
-hermes curve-memory setup             # 安装后初始化
-hermes curve-memory install-wizard    # 交互式向导
-hermes curve-memory activate          # 重新启用
-hermes curve-memory deactivate        # 停用（保留数据）
-hermes curve-memory uninstall [-y]    # 卸载
-hermes curve-memory uninstall --all   # 卸载 + 清除数据
-hermes curve-memory export backup.tar.gz  # 导出
-
-# 每日
-hermes curve-memory daily-tick        # 手动衰减
+hermes curve-memory index            # 增量更新
+hermes curve-memory index --rebuild  # 全量重建
 ```
 
 ## 相关项目
@@ -294,16 +321,18 @@ hermes curve-memory daily-tick        # 手动衰减
 └── curve_memory/
     ├── __init__.py               # 包标记
     ├── provider.py               # MemoryProvider 实现
-    ├── cli.py                    # CLI 工具
+    ├── cli.py                    # CLI 工具（7 个命令）
     ├── core/
     │   ├── __init__.py
     │   ├── tier.py               # R(t) 引擎 + TIER 映射
     │   ├── search.py             # 三路混合检索
     │   ├── activity.py           # ACTIVITY.yaml 读写
-    │   ├── chunker.py            # H2 章节分块
-    │   ├── embedding_provider.py # Ollama 嵌入封装
-    │   ├── forgetting.py         # 每日衰减 cron 脚本
-    │   └── indexer.py            # FTS5 + 嵌入索引构建器
+    │   ├── embedding.py          # ABC EmbeddingProvider + 工厂
+    │   ├── config.py             # 配置 schema、加载/保存
+    │   └── chunker.py            # H2 章节分块
+    ├── backends/
+    │   ├── __init__.py
+    │   └── ollama.py             # Ollama 嵌入客户端
     └── skill/
         └── SKILL.md              # Agent 协议文档
 ```
@@ -312,15 +341,15 @@ hermes curve-memory daily-tick        # 手动衰减
 
 ```
 ~/.hermes/memories/
-├── ACTIVITY.yaml              # t, access_count, mature, protected 标志
+├── ACTIVITY.yaml              # t（时间戳）, access_count, mature, protected 标志
 ├── MEMORY.md                  # idx:topic [t=N] → active/topic.md
-├── active/                    # 活跃记忆文件（13 个）
+├── active/                    # 活跃记忆文件
 ├── .embedding_index/          # 每个 topic 的 JSONL 向量索引 (768-4096d)
 ├── .fts5/curve_memory_fts5.db # SQLite FTS5 全文索引
 ├── archive/
 │   ├── forgotten/             # 冷存储（可恢复）
 │   └── mature/                # 永久知识快照
-└── FORGET_LOG.md              # 归档事件日志
+└── curve-memory-config.json   # 插件配置文件
 ```
 
 ## 设计决策
@@ -332,19 +361,38 @@ hermes curve-memory daily-tick        # 手动衰减
 | **Ollama vs sentence-transformers** | 零 Python ML 依赖，独立服务，多模型支持 |
 | **YAML vs SQLite 存储活跃度** | 人类可读，脚本友好，agent 可直接编辑 |
 | **双层归档 vs 单层** | 高频使用的记忆应被提升而非删除 |
-| **文件锁 vs 数据库事务** | 简单，足够应对单人 cron 冲突 |
-| **Importlib 加载带连字符脚本** | 保持与 ~/.hermes/scripts/ 的向后兼容 |
+| **基于时间戳的 R(t) vs cron** | 无需 cron，查询时从 Unix 时间戳实时计算 |
+| **惰性归档 vs 每日 cron** | 归档在 initialize/end-session 时触发，无需定时脚本 |
+| **JSON 配置 vs YAML 配置段** | 独立文件，兼容 get_config_schema() / save_config() |
+| **`memory.provider` vs `memory.plugin`** | 标准 ABC MemoryProvider 接口 |
+
+## MemoryProvider 实现
+
+本插件实现了完整的 `MemoryProvider` 抽象基类：
+
+| 方法 | 用途 |
+|------|------|
+| `initialize()` | 创建资源，加载配置，初始化嵌入引擎，执行惰性归档 |
+| `prefetch(query)` | 每轮对话前调用——注入最多 3 条相关记忆 |
+| `sync_turn(user, asst)` | 每轮对话后调用——更新提到主题的活性 |
+| `system_prompt_block()` | 记忆系统的简短描述 |
+| `get_tool_schemas()` | 返回 OpenAI function-calling 格式的 `curve_memory_search` 工具 |
+| `handle_tool_call()` | 执行 `curve_memory_search` 工具调用 |
+| `get_config_schema()` | 为 `hermes memory setup` 提供配置 schema |
+| `save_config(values, hermes_home)` | 从 schema values 保存配置 |
+| `on_session_end(messages)` | 对话结束时惰性归档 |
+| `shutdown()` | 清理资源 |
 
 ## 路线图
 
 - [x] Phase 0: 准备与备份
-- [x] Phase 1: 遗忘曲线核心（R(t), TIER, cron 衰减）
+- [x] Phase 1: 遗忘曲线核心（R(t), TIER, 衰减）
 - [x] Phase 2: 语义检索（FTS5 + Embedding + R(t) 融合）
 - [x] Phase 3: Hermes Plugin 封装与 CLI
 - [x] Phase 4: 集成与端到端验证
-- [ ] Phase 5: 长期调优（α/β/γ 权重、TIER 阈值、成熟度参数）
+- [x] Phase 5: MemoryProvider ABC 重构
+- [ ] Phase 6: 长期调优（α/β/γ 权重、TIER 阈值、成熟度参数）
 
 ## 许可
 
 MIT
-- [ralqlator](tools/ralqlator) — CLI calculator for R(t) formula verification and math computation
