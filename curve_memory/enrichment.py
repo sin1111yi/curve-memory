@@ -343,3 +343,140 @@ def enrich_memory(
     except Exception as e:
         logger.debug("enrich_memory error for '%s': %s", topic, e)
         return False
+
+
+# ── Embedding index sweep ──────────────────────────────────────
+
+
+def _needs_reindex(mem_path: Path, index_path: Path) -> bool:
+    """检查是否需要重新计算 embedding 索引"""
+    if not index_path.exists():
+        return True
+    # 如果内容比索引新，需要更新
+    md_mtime = mem_path.stat().st_mtime
+    idx_mtime = index_path.stat().st_mtime
+    return md_mtime > idx_mtime + 1  # 1秒容差
+
+
+def index_sweep(memories_dir: Path, embedder) -> dict:
+    """扫描所有活跃记忆，重建缺失或过期的 embedding 索引。
+
+    返回值：
+        {
+            "indexed": int,     # 重建的主题数
+            "cleaned": int,     # 清理的孤立索引文件数
+            "errors": int,      # 处理失败数
+            "details": [        # 每个主题的处理记录
+                {"topic": str, "status": "ok"|"skipped"|"error",
+                 "chunks": int|None, "message": str|None}
+            ]
+        }
+    """
+    result = {
+        "indexed": 0,
+        "cleaned": 0,
+        "errors": 0,
+        "details": [],
+    }
+
+    active_dir = memories_dir / "active"
+    embedding_dir = memories_dir / ".embedding_index"
+    if not active_dir.exists():
+        return result
+
+    embedding_dir.mkdir(parents=True, exist_ok=True)
+
+    # 获取活跃主题列表
+    data = _read_activity(memories_dir)
+    active_topics = set(data.get("memories", {}).keys())
+
+    # 1. 对每个活跃主题检查索引
+    for topic in sorted(active_topics):
+        mem_path = active_dir / f"{topic}.md"
+        if not mem_path.exists():
+            result["details"].append({
+                "topic": topic, "status": "skipped",
+                "message": "no .md file in active/",
+            })
+            continue
+
+        index_path = embedding_dir / f"{topic}.jsonl"
+
+        if not _needs_reindex(mem_path, index_path):
+            result["details"].append({
+                "topic": topic, "status": "skipped",
+                "message": "up to date",
+            })
+            continue
+
+        # 读取内容
+        try:
+            content = mem_path.read_text(encoding="utf-8")
+        except Exception as e:
+            result["errors"] += 1
+            result["details"].append({
+                "topic": topic, "status": "error",
+                "message": f"read failed: {e}",
+            })
+            continue
+
+        if not content.strip():
+            result["details"].append({
+                "topic": topic, "status": "skipped",
+                "message": "empty content",
+            })
+            continue
+
+        # 分块（按行分组，每块不超过 2000 字符）
+        lines = content.splitlines()
+        chunks = []
+        current_chunk = []
+        current_len = 0
+        for line in lines:
+            current_chunk.append(line)
+            current_len += len(line) + 1  # +1 for newline
+            if current_len >= 2000:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_len = 0
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
+
+        if not chunks:
+            chunks = [content[:2000]]
+
+        # 计算 embedding 并写入
+        try:
+            with open(index_path, "w", encoding="utf-8") as f:
+                for seq, chunk_text in enumerate(chunks):
+                    vector = embedder.embed(chunk_text)
+                    record = {
+                        "topic": topic,
+                        "chunk": seq,
+                        "text": chunk_text,
+                        "vector": vector,
+                    }
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            result["indexed"] += 1
+            result["details"].append({
+                "topic": topic, "status": "ok",
+                "chunks": len(chunks),
+            })
+        except Exception as e:
+            result["errors"] += 1
+            result["details"].append({
+                "topic": topic, "status": "error",
+                "message": f"embed failed: {e}",
+            })
+
+    # 2. 清理孤立索引文件（主题已不在活跃列表中的）
+    if embedding_dir.exists():
+        for fpath in embedding_dir.glob("*.jsonl"):
+            if fpath.stem not in active_topics:
+                try:
+                    fpath.unlink()
+                    result["cleaned"] += 1
+                except Exception:
+                    pass
+
+    return result
