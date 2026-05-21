@@ -301,6 +301,54 @@ def cmd_setup(args):
     print(f"Setup complete. Cron scripts at {scripts_dir}")
 
 
+def cmd_uninstall(args):
+    """卸载：清除 cron 软链接、cron 任务、选项性清除数据"""
+    import shutil
+    import json
+    scripts_dir = Path.home() / ".hermes" / "scripts"
+    memories_dir = Path.home() / ".hermes" / "memories"
+    knowledge_dir = Path.home() / ".hermes" / "knowledge"
+
+    print("=== Uninstalling curve-memory ===")
+
+    # 1. 删除软链接
+    for name in ["curve-memory-forgetting.py", "curve-memory-indexer.py"]:
+        p = scripts_dir / name
+        if p.is_symlink() or p.exists():
+            p.unlink()
+            print(f"  ✅ Removed symlink: {name}")
+
+    # 2. 删除 cron 任务
+    cron_file = Path.home() / ".hermes" / "cron" / "jobs.json"
+    if cron_file.exists():
+        data = json.loads(cron_file.read_text())
+        before = len(data.get("jobs", []))
+        data["jobs"] = [
+            j for j in data.get("jobs", [])
+            if "snowlyn-memory-decay" not in j.get("name", "")
+            and "snowlyn-memory-index" not in j.get("name", "")
+        ]
+        after = len(data.get("jobs", []))
+        cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        print(f"  ✅ Removed {before - after} cron job(s)")
+
+    # 3. 清除数据（仅 --all 时）
+    if args.all:
+        for d in [memories_dir / ".embedding_index",
+                   memories_dir / ".fts5",
+                   memories_dir / "archive" / "forgotten",
+                   memories_dir / "archive" / "mature",
+                   knowledge_dir]:
+            if d.exists():
+                shutil.rmtree(d)
+                print(f"  ✅ Removed: {d.relative_to(Path.home())}")
+        print("  ✅ All data cleared")
+    else:
+        print("  ℹ️  Memory data preserved (use --all to also clear data)")
+
+    print("Done. You can now run: hermes plugins remove curve-memory")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Curve Memory System CLI")
     sub = parser.add_subparsers(dest="command")
@@ -348,6 +396,11 @@ def main():
     # setup
     p_setup = sub.add_parser("setup", help="创建 cron 脚本软链接")
     p_setup.set_defaults(func=cmd_setup)
+
+    # uninstall
+    p_uninstall = sub.add_parser("uninstall", help="卸载：清除软链接、cron、数据")
+    p_uninstall.add_argument("--all", action="store_true", help="同时清除记忆数据")
+    p_uninstall.set_defaults(func=cmd_uninstall)
 
     args = parser.parse_args()
     if hasattr(args, "func"):
