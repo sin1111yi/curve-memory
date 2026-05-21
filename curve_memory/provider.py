@@ -249,42 +249,84 @@ class CurveMemoryProvider(MemoryProvider):
     # ── User profile (natural language) ────────────────────────────
 
     def _load_user_profile(self):
-        """从磁盘加载用户画像（自然语言 + 工具条目）"""
+        """从磁盘加载用户画像（自然语言 + 工具条目）
+
+        兼容以下格式：
+        1. 新格式：自然语言 + ## Auto 段（key: value 条目）
+        2. 旧格式：自然语言 + § 分隔 + key: value 行（OpenClaw 时代遗留）
+        3. 纯自然语言：无任何分隔段（回退：从中提取 key: value 模式）
+        """
         self._user_profile = {}  # dict for tool ops
         self._user_profile_raw = ""  # raw natural language section
-        if self._user_profile_path and self._user_profile_path.exists():
-            try:
-                text = self._user_profile_path.read_text(encoding="utf-8")
-                # 分割手动区（## Auto）
+        if not self._user_profile_path or not self._user_profile_path.exists():
+            return
+        try:
+            text = self._user_profile_path.read_text(encoding="utf-8")
+            has_auto = "## Auto" in text
+            has_section = "§" in text and not has_auto
+
+            if has_auto:
+                # 新格式：## Auto 段
                 parts = text.split("## Auto")
                 self._user_profile_raw = parts[0].strip()
-                # 去掉顶部的 # User Profile 标题（system_prompt_block 会重加）
                 if self._user_profile_raw.startswith("# User Profile"):
                     self._user_profile_raw = self._user_profile_raw[len("# User Profile"):].strip()
                 if len(parts) > 1:
-                    for line in parts[1].splitlines():
-                        line = line.strip()
-                        if line and not line.startswith("#") and ":" in line:
-                            k, _, v = line.partition(":")
-                            self._user_profile[k.strip()] = v.strip()
-            except Exception as e:
-                logger.debug("User profile load error: %s", e)
-                self._user_profile = {}
-                self._user_profile_raw = ""
+                    self._parse_kv_lines(parts[1])
+            elif has_section:
+                # 旧格式：§ 分隔
+                parts = text.split("§")
+                self._user_profile_raw = parts[0].strip()
+                if len(parts) > 1:
+                    self._parse_kv_lines(parts[1])
+            else:
+                # 纯自然语言 — 尝试从中提取 key: value 模式
+                self._user_profile_raw = text.strip()
+                self._parse_kv_lines(text)
+
+        except Exception as e:
+            logger.debug("User profile load error: %s", e)
+            self._user_profile = {}
+            self._user_profile_raw = ""
+
+    def _parse_kv_lines(self, text: str):
+        """从文本中提取 key: value 模式的行"""
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            # 跳过明显不是 key:value 的行（包含 CJK 标点、空格过多）
+            k, _, v = line.partition(":")
+            k = k.strip()
+            v = v.strip()
+            if k and v and len(k) < 40 and len(v) < 300:
+                self._user_profile[k] = v
 
     def _save_user_profile(self):
-        """持久化用户画像：自然语言 + 工具条目"""
-        if self._user_profile_path:
-            self._user_profile_path.parent.mkdir(parents=True, exist_ok=True)
-            lines = [self._user_profile_raw or "# User Profile", ""]
-            if self._user_profile:
-                lines.append("## Auto")
-                lines.append("")
-                lines.append(f"更新于 {time.strftime('%Y-%m-%d %H:%M')}")
-                lines.append("")
-                for k, v in sorted(self._user_profile.items()):
-                    lines.append(f"{k}: {v}")
-            self._user_profile_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        """持久化用户画像：自然语言 + 工具条目。
+
+        兼容处理：
+        - 如果 _user_profile_raw 包含 § 或重复片段，首次写入时自动迁移清理
+        """
+        if not self._user_profile_path:
+            return
+        self._user_profile_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 清理：如果 raw 包含 §，只保留前半段（§ 后的内容已迁移到 ## Auto）
+        raw = self._user_profile_raw or "# User Profile"
+        if "§" in raw:
+            raw = raw.split("§")[0].strip()
+        raw = raw.strip() or "# User Profile"
+
+        lines = [raw, ""]
+        if self._user_profile:
+            lines.append("## Auto")
+            lines.append("")
+            lines.append(f"更新于 {time.strftime('%Y-%m-%d %H:%M')}")
+            lines.append("")
+            for k, v in sorted(self._user_profile.items()):
+                lines.append(f"{k}: {v}")
+        self._user_profile_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # ── Migration / cleanup ─────────────────────────────────────────
 
@@ -434,7 +476,11 @@ class CurveMemoryProvider(MemoryProvider):
             "TIER_4 (≤3d), TIER_3 (≤7d), TIER_2 (≤14d), ARCHIVE (≥30d)."
         ]
         if self._user_profile_raw:
-            lines.append(f"\n## User Profile\n{self._user_profile_raw}")
+            # 截断过长的自然语言节，节省 token
+            raw = self._user_profile_raw[:500]
+            if len(self._user_profile_raw) > 500:
+                raw += "\n... (truncated, full profile in USER.md)"
+            lines.append(f"\n## User Profile\n{raw}")
         return "\n".join(lines)
 
     # ── Prefetch ────────────────────────────────────────────────────
@@ -518,7 +564,10 @@ class CurveMemoryProvider(MemoryProvider):
                 return json.dumps({"error": str(e)})
 
         if tool_name == "curve_memory_user_get":
-            return json.dumps({"profile": dict(self._user_profile)})
+            result = {"profile": dict(self._user_profile)}
+            if self._user_profile_raw:
+                result["raw"] = self._user_profile_raw[:300]
+            return json.dumps(result)
 
         if tool_name == "curve_memory_user_set":
             key = str(args.get("key", "")).strip()
