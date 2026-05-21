@@ -116,7 +116,7 @@ t ≥ 30 天 → mv active/*.md → archive/forgotten/
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
-│  核心引擎 (curve_memory/core/)                        │
+│  核心引擎                                      │
 │                                                      │
 │  tier.py         R(t) 公式 + TIER 映射                │
 │  search.py       BM25 + Embedding + R(t) 融合          │
@@ -124,32 +124,32 @@ t ≥ 30 天 → mv active/*.md → archive/forgotten/
 │  embedding.py    ABC EmbeddingProvider + 工厂函数       │
 │  config.py       get_config_schema, 加载/保存配置       │
 │                                                      │
-│  backends/ollama.py   Ollama 嵌入客户端                 │
+│  agent/provider.py    MemoryProvider 实现              │
+│  core/                R(t), 检索, 活跃度, 嵌入, 配置   │
+│  backends/            Ollama 嵌入客户端                │
+│  enrichment.py        降级, 归档, 丰富, index_sweep    │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
-│  存储层 (~/.hermes/memories/)                         │
+│  Hermes 托管 (~/.hermes/)                              │
 │                                                      │
-│  ACTIVITY.yaml       t (Unix 时间戳), access_count    │
-│  MEMORY.md           idx:topic [t=N] → active/       │
-│  active/*.md         活跃记忆文件                      │
-│  .embedding_index/   每个 topic 的 JSONL 向量索引      │
-│  .fts5/              SQLite FTS5 全文索引             │
-│  archive/forgotten/  冷存储（可恢复）                  │
-│  archive/mature/     永久知识快照                      │
-└──────────────────────────────────────────────────────┘
+│  memories/           记忆 + 画像 + 嵌入 + FTS5         │
+│  cron/jobs.json      索引更新 cron（自动注册）          │
+│  scripts/curve-memory-index-sweep.py  独立 cron 入口   │
+│  curve-memory-config.json   插件配置文件               │
 ```
 
 ## 数据流
 
 ### 写入路径
-```
+```python
 agent 写入 active/<topic>.md
-  → CLI index 检测 mtime 变化
-  → 按内容分块（TIER 自适应大小）
-  → 通过 Ollama qwen3-embedding:8b 嵌入
-  → 写入 .embedding_index/<topic>.jsonl
-  → 更新 FTS5 索引
+  → index_sweep()（initialize 时懒加载，或每日 03:00 cron）:
+    → 检查 .jsonl mtime vs .md mtime
+    → 分块（每块 ≤2000 字符）
+    → 通过 Ollama qwen3-embedding:8b 嵌入（/api/embed，60s 超时）
+    → 写入 .embedding_index/<topic>.jsonl
+  → (FTS5 索引：在线更新，sync_turn() 在对话中同步)
 ```
 
 ### 读取路径
@@ -174,10 +174,28 @@ initialize() / on_session_end():
   → 更新 ACTIVITY.yaml
 ```
 
-### 无 cron
-旧的 cron 脚本（`curve-memory-forgetting.py`、`curve-memory-indexer.py`）已移除。
-- R(t) 在查询时从 Unix 时间戳实时计算——无需 day-counter 递增。
-- 归档在 `initialize()` 和 `on_session_end()` 中惰性执行。
+### 索引更新 cron（每日凌晨 3:00）
+
+```cron
+initialize():
+  → 如果 embedder 可用: 立刻跑一次 index_sweep()（懒加载，即时补全）
+  → 注册每日 cron（no_agent 模式，幂等，已注册则跳过）
+
+每日 03:00（通过 Hermes cron 调度器）:
+  → 脚本: ~/.hermes/scripts/curve-memory-index-sweep.py
+  → 对每个活跃 topic: 检查 .jsonl mtime vs .md mtime
+    → 缺失或过期 → 分块（≤2000 字符）→ 嵌入 → 写入 .jsonl
+  → 清理孤立 .jsonl（topic 已不在 ACTIVITY.yaml 中的）
+```
+
+| 项目 | 说明 |
+|------|------|
+| 执行时间 | 每日 03:00（可通过 `jobs.json` 调整） |
+| 模式 | `no_agent`（纯脚本，不消耗 LLM token） |
+| 耗时 | ~1 分钟/10 个 topic，增量 ~10s |
+| 脚本位置 | `~/.hermes/scripts/curve-memory-index-sweep.py` |
+| 自动注册 | `initialize()` 中 `_register_index_cron()` — 一次性，幂等 |
+| 清理 | `shutdown()` 中清理过期 job |
 
 ## 配置
 
@@ -362,20 +380,24 @@ hermes curve-memory index --rebuild  # 全量重建
 ├── __init__.py                  # 注册入口
 ├── README.md                    # 英文文档
 ├── README-zh.md                 # 本文件（中文文档）
+├── after-install.md             # 安装后指引
+├── scripts/
+│   └── curve-memory-index-sweep.py   # cron 独立入口
 └── curve_memory/
     ├── __init__.py               # 包标记
     ├── provider.py               # MemoryProvider 实现
     ├── cli.py                    # CLI 工具（7 个命令）
+    ├── enrichment.py             # 降级、归档、丰富、index_sweep
     ├── core/
     │   ├── __init__.py
     │   ├── tier.py               # R(t) 引擎 + TIER 映射
     │   ├── search.py             # 三路混合检索
     │   ├── activity.py           # ACTIVITY.yaml 读写
     │   ├── embedding.py          # ABC EmbeddingProvider + 工厂
-    │   ├── config.py             # 配置 schema、加载/保存
-    │   └── backends/
-    │       ├── __init__.py
-    │       └── ollama.py             # Ollama 嵌入客户端
+    │   └── config.py             # 配置 schema、加载/保存
+    ├── backends/
+    │   ├── __init__.py
+    │   └── ollama.py             # Ollama 嵌入客户端
     └── skill/
         └── SKILL.md              # Agent 协议文档
 ```
@@ -386,13 +408,19 @@ hermes curve-memory index --rebuild  # 全量重建
 ~/.hermes/memories/
 ├── ACTIVITY.yaml              # t（时间戳）, access_count, mature, protected 标志
 ├── MEMORY.md                  # idx:topic [t=N] → active/topic.md
-├── active/                    # 活跃记忆文件
-├── .embedding_index/          # 每个 topic 的 JSONL 向量索引 (768-4096d)
+├── active/                    # 活跃记忆文件（*.md）
+├── .embedding_index/          # 每个 topic 的 JSONL 向量索引（*.jsonl）
 ├── .fts5/curve_memory_fts5.db # SQLite FTS5 全文索引
 ├── archive/
 │   ├── forgotten/             # 冷存储（可恢复）
 │   └── mature/                # 永久知识快照
-└── curve-memory-config.json   # 插件配置文件
+├── USER.md                    # 用户画像（自然语言 + ## Auto）
+└── .tier_cache.json           # TIER 缓存（用于 detect_tier_drops）
+
+~/.hermes/
+├── scripts/curve-memory-index-sweep.py   # cron 脚本（自动复制）
+├── cron/jobs.json                        # cron 注册（自动管理）
+└── curve-memory-config.json              # 插件配置文件
 ```
 
 ## 设计决策
@@ -406,6 +434,7 @@ hermes curve-memory index --rebuild  # 全量重建
 | **双层归档 vs 单层** | 高频使用的记忆应被提升而非删除 |
 | **基于时间戳的 R(t) vs cron** | 无需 cron，查询时从 Unix 时间戳实时计算 |
 | **惰性归档 vs 每日 cron** | 归档在 initialize/end-session 时触发，无需定时脚本 |
+| **cron 驱动索引更新 vs 在线索引** | 嵌入计算每日 03:00 通过 no_agent 脚本运行；新记忆 24h 内自动索引，不阻塞对话 |
 | **JSON 配置 vs YAML 配置段** | 独立文件，兼容 get_config_schema() / save_config() |
 | **`memory.provider` vs `memory.plugin`** | 标准 ABC MemoryProvider 接口 |
 

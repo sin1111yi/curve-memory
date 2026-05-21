@@ -124,32 +124,33 @@ Frequently-used memories are promoted to permanent knowledge documents instead o
 │  embedding.py   ABC EmbeddingProvider + factory       │
 │  config.py      get_config_schema, load/save config   │
 │                                                      │
-│  backends/ollama.py   Ollama embedding client         │
-└──────────────────────┬───────────────────────────────┘
+│  agent/provider.py    MemoryProvider implementation            │
+│  core/                R(t), search, activity, embedding, config │
+│  backends/            Ollama embedding client                   │
+│  enrichment.py        degrade, archive, enrich, index_sweep     │
+└──────────────────────┬──────────────────────────────────────────┘
                        │
-┌──────────────────────▼───────────────────────────────┐
-│  Storage (~/.hermes/memories/)                       │
-│                                                      │
-│  ACTIVITY.yaml       t (Unix timestamp), access_...  │
-│  MEMORY.md           idx:topic [t=N] → active/       │
-│  active/*.md         Live memory files               │
-│  .embedding_index/   Per-topic JSONL vector index    │
-│  .fts5/              SQLite FTS5 full-text index     │
-│  archive/forgotten/  Cold storage (recoverable)      │
-│  archive/mature/     Permanent knowledge snapshots   │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────▼───────────────────────────────────────────┐
+│  Hermes-managed (~/.hermes/)                                    │
+│                                                                    │
+│  memories/           Memory + profile + embeddings + FTS5       │
+│  cron/jobs.json      Index sweep cron (auto-registered)         │
+│  scripts/curve-memory-index-sweep.py  Standalone cron entry     │
+│  curve-memory-config.json   Plugin configuration                │
 ```
 
 ## Data Flow
 
 ### Write Path
-```
+
+```python
 agent writes active/<topic>.md
-  → CLI index detects mtime change
-  → chunk by content (tier-adaptive sizing)
-  → embed via Ollama qwen3-embedding:8b
-  → write .embedding_index/<topic>.jsonl
-  → update FTS5 index
+  → index_sweep() (lazy on initialize, or daily cron at 03:00):
+    → check .jsonl mtime vs .md mtime
+    → chunk content (≤2000 chars per chunk)
+    → embed via Ollama qwen3-embedding:8b (/api/embed, 60s timeout)
+    → write .embedding_index/<topic>.jsonl
+  → (FTS5 index: online, updated by sync_turn() during conversation)
 ```
 
 ### Read Path
@@ -174,10 +175,30 @@ initialize() / on_session_end():
   → update ACTIVITY.yaml
 ```
 
-### No cron
-The old cron scripts (`curve-memory-forgetting.py`, `curve-memory-indexer.py`) have been removed.
-- R(t) is computed from Unix timestamps at query time — no day-counter increment needed.
-- Archive sweep happens lazily in `initialize()` and `on_session_end()`.
+### Index Sweep Cron (daily 3:00 AM)
+
+```cron
+initialize():
+  → if embedder available: run index_sweep() (lazy, catches up immediately)
+  → register a daily no_agent cron (idempotent, skipped if already registered)
+
+Daily at 03:00 (via Hermes cron scheduler):
+  → script: ~/.hermes/scripts/curve-memory-index-sweep.py
+  → for each active topic: check .jsonl mtime vs .md mtime
+    → missing or stale → chunk content (≤2000 chars) → embed → write .jsonl
+  → remove orphaned .jsonl files (topics no longer in ACTIVITY.yaml)
+```
+
+| Item | Detail |
+|------|--------|
+| Schedule | Daily at 03:00 (configurable via `jobs.json`) |
+| Mode | `no_agent` (pure script, no LLM involved) |
+| Runtime | ~1 min for 10 topics, ~10s incremental |
+| Script location | `~/.hermes/scripts/curve-memory-index-sweep.py` |
+| Auto-registration | `_register_index_cron()` in `initialize()` — one-time, idempotent |
+| Cleanup | `shutdown()` removes stale jobs and scripts |
+
+The cron ensures embedding indexes are always fresh — new memories written during conversation are automatically indexed within 24 hours, even without manual `hermes curve-memory index` commands.
 
 ## Config
 
@@ -365,20 +386,24 @@ hermes curve-memory index --rebuild  # Full rebuild from scratch
 ├── __init__.py                  # Registration entry point
 ├── README.md                    # This file (English)
 ├── README-zh.md                 # Chinese documentation
+├── after-install.md             # Post-install guide
+├── scripts/
+│   └── curve-memory-index-sweep.py   # Standalone cron entry point
 └── curve_memory/
     ├── __init__.py               # Package marker
     ├── provider.py               # MemoryProvider implementation
     ├── cli.py                    # CLI tool (7 commands)
+    ├── enrichment.py             # degrade, archive, enrich, index_sweep
     ├── core/
     │   ├── __init__.py
     │   ├── tier.py               # R(t) engine + TIER mapping
     │   ├── search.py             # Three-way hybrid search
     │   ├── activity.py           # ACTIVITY.yaml read/write
     │   ├── embedding.py          # ABC EmbeddingProvider + factory
-    │   ├── config.py             # Config schema, load/save config
-    │   └── backends/
-    │       ├── __init__.py
-    │       └── ollama.py             # Ollama embedding client
+    │   └── config.py             # Config schema, load/save config
+    ├── backends/
+    │   ├── __init__.py
+    │   └── ollama.py             # Ollama embedding client (/api/embed)
     └── skill/
         └── SKILL.md              # Agent protocol document
 ```
@@ -389,13 +414,19 @@ hermes curve-memory index --rebuild  # Full rebuild from scratch
 ~/.hermes/memories/
 ├── ACTIVITY.yaml              # t (timestamp), access_count, mature, protected flags
 ├── MEMORY.md                  # idx:topic [t=N] → active/topic.md
-├── active/                    # Live memory files
-├── .embedding_index/          # Per-topic JSONL vector index (768-4096d)
+├── active/                    # Live memory files (*.md)
+├── .embedding_index/          # Per-topic JSONL vector index (*.jsonl)
 ├── .fts5/curve_memory_fts5.db # SQLite FTS5 full-text index
 ├── archive/
 │   ├── forgotten/             # Cold storage (recoverable)
 │   └── mature/                # Permanent knowledge snapshots
-└── curve-memory-config.json   # Plugin configuration
+├── USER.md                    # User profile (natural language + ## Auto)
+└── .tier_cache.json           # Cached TIER levels (for detect_tier_drops)
+
+~/.hermes/
+├── scripts/curve-memory-index-sweep.py   # Cron script (auto-copied)
+├── cron/jobs.json                        # Cron registry (auto-managed)
+└── curve-memory-config.json              # Plugin configuration
 ```
 
 ## Design Decisions
@@ -409,6 +440,7 @@ hermes curve-memory index --rebuild  # Full rebuild from scratch
 | **Dual archive over single** | Frequently-used memories deserve promotion, not deletion |
 | **Timestamp-based R(t) over cron** | No cron dependency, computed at query time from Unix timestamps |
 | **Lazy archive sweep over daily cron** | Archive happens on initialize/end-session, not via scheduled scripts |
+| **Cron-driven index sweep over online indexing** | Embedding computation runs daily at 03:00 via no_agent script; new memories indexed within 24h without blocking conversation |
 | **JSON config over YAML section** | Self-contained, compatible with `get_config_schema()` / `save_config()` |
 | **`memory.provider` over `memory.plugin`** | Standard ABC MemoryProvider interface |
 
