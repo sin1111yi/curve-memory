@@ -1,6 +1,8 @@
 # curve-memory — 遗忘曲线记忆系统
 
 > **⚠️ Alpha — 测试阶段。本插件接管 Hermes 的记忆系统和用户画像，当前版本可能包含未发现的问题，包括但不限于数据丢失、双系统冲突、配置失效等。请先在测试环境中验证，确认后再在正式环境使用。**
+>
+> **⚠️ Alpha — testing phase. This plugin takes over Hermes' memory system and user profile. The current version may contain undiscovered issues including but not limited to data loss, dual-system conflicts, and configuration failures. Validate in a test environment before using in production.**
 
 基于 [Hermes Agent](https://hermes-agent.nousresearch.com) 的记忆插件，使用科学遗忘曲线管理 AI 记忆。
 
