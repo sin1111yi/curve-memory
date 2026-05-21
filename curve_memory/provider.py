@@ -393,11 +393,15 @@ if embedder:
     def _register_index_cron(self):
         """注册 index sweep 定时 cron（每日 3:00），仅当尚未注册时"""
         try:
-            cron_file = self._base / "cron" / "jobs.json"
-            if not cron_file.exists():
-                return
+            cron_dir = self._base / "cron"
+            cron_dir.mkdir(parents=True, exist_ok=True)
+            cron_file = cron_dir / "jobs.json"
 
-            data = json.loads(cron_file.read_text())
+            # 初始化空 jobs.json（新用户首次使用 cron 时文件不存在）
+            if cron_file.exists():
+                data = json.loads(cron_file.read_text())
+            else:
+                data = {"jobs": [], "updated_at": ""}
             jobs = data.get("jobs", [])
 
             # 检查是否已有同名 job
