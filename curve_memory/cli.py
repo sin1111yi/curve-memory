@@ -400,6 +400,148 @@ def cmd_uninstall(args):
     print("Done. You can now run: hermes plugins remove curve-memory")
 
 
+def cmd_repair(args):
+    """修复：检查 ACTIVITY.yaml、清理锁、重建索引"""
+    import json, shutil
+    memories_dir = Path.home() / ".hermes" / "memories"
+    activity_path = memories_dir / "ACTIVITY.yaml"
+    lock_path = memories_dir / ".memory.lock"
+    found_issues = 0
+
+    print("=== Repair ===")
+
+    # 1. 检查 ACTIVITY.yaml 版本
+    print("1️⃣  ACTIVITY.yaml... ", end="", flush=True)
+    if activity_path.exists():
+        raw = activity_path.read_text(encoding="utf-8")
+        if "format_version:" in raw:
+            # 提取版本
+            import re
+            m = re.search(r'format_version:\s*(\d+)', raw)
+            ver = int(m.group(1)) if m else 0
+            if ver < 3:
+                print(f"⚠️  v{ver} → 需要迁移")
+                found_issues += 1
+            else:
+                print(f"✅ v{ver}")
+        else:
+            print("⚠️  无法识别格式")
+            found_issues += 1
+    else:
+        print("❌ 不存在")
+        found_issues += 1
+
+    # 2. 检查锁文件
+    print("2️⃣  Lock file... ", end="", flush=True)
+    if lock_path.exists():
+        pid = lock_path.read_text().strip()
+        import subprocess
+        r = subprocess.run(["ps", "-p", pid], capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            lock_path.unlink()
+            print(f"✅ 已清理僵尸锁 (PID {pid})")
+        else:
+            print(f"🔒 进程 {pid} 仍在运行")
+    else:
+        print("✅ 无残留")
+
+    # 3. 检查嵌入索引完整性
+    print("3️⃣  Embedding index... ", end="", flush=True)
+    emb_dir = memories_dir / ".embedding_index"
+    if emb_dir.exists():
+        broken = 0
+        for f in emb_dir.glob("*.jsonl"):
+            try:
+                for line in f.read_text().strip().splitlines():
+                    if line.strip():
+                        json.loads(line)
+            except (json.JSONDecodeError, Exception):
+                broken += 1
+                f.unlink()
+        if broken:
+            print(f"⚠️  修复 {broken} 个损坏文件")
+            found_issues += 1
+        else:
+            print(f"✅ {len(list(emb_dir.glob('*.jsonl')))} 个文件正常")
+    else:
+        print("⚠️  索引目录不存在")
+
+    # 4. 检查 FTS5
+    print("4️⃣  FTS5 index... ", end="", flush=True)
+    fts5_path = memories_dir / ".fts5" / "curve_memory_fts5.db"
+    if fts5_path.exists():
+        import sqlite3
+        try:
+            conn = sqlite3.connect(str(fts5_path))
+            conn.execute("SELECT count(*) FROM memory_fts")
+            conn.close()
+            print("✅")
+        except Exception:
+            print("⚠️  损坏，重建")
+            fts5_path.unlink()
+            found_issues += 1
+    else:
+        print("⚠️  不存在")
+
+    # 5. 自动修复
+    if args.fix:
+        print("\n🛠️  自动修复:")
+        if not activity_path.exists():
+            print("   ACTIVITY.yaml 丢失 → 跳过")
+        if lock_path.exists():
+            lock_path.unlink()
+        if found_issues > 0:
+            print(f"   建议运行: curve-memory index --rebuild")
+
+    if found_issues == 0:
+        print("\n✅ 一切正常")
+    else:
+        print(f"\n⚠️  发现 {found_issues} 个问题" + ("，已部分修复" if args.fix else "，用 --fix 自动修复"))
+    print(f"   Lock: {lock_path}")
+
+
+def cmd_recover(args):
+    """恢复：从 archive/ 恢复已归档的记忆"""
+    import shutil
+    memories_dir = Path.home() / ".hermes" / "memories"
+    activity_path = memories_dir / "ACTIVITY.yaml"
+
+    # 搜索所有归档中的主题
+    candidates = []
+    for archive_dir in [memories_dir / "archive" / "forgotten", memories_dir / "archive" / "mature"]:
+        if archive_dir.exists():
+            for f in archive_dir.glob("*.md"):
+                if f.name != "FORGET_LOG.md":
+                    candidates.append((f.stem, archive_dir.name, f))
+
+    if args.list:
+        print("=== Archived Topics ===")
+        for topic, kind, path in sorted(candidates):
+            print(f"  {topic:25s} ({kind})")
+        return
+
+    if not args.topic:
+        print(f"可用主题: {', '.join(sorted(set(t for t,_,_ in candidates)))}")
+        print("使用: curve-memory recover <topic>")
+        return
+
+    # 查找主题
+    found = [c for c in candidates if c[0] == args.topic]
+    if not found:
+        print(f"❌ 未找到 '{args.topic}' 在 archive/ 中")
+        return
+
+    for topic, kind, src_path in found:
+        dst_path = memories_dir / "active" / f"{topic}.md"
+        if dst_path.exists():
+            print(f"⚠️  active/{topic}.md 已存在，跳过")
+            continue
+        shutil.copy2(str(src_path), str(dst_path))
+        print(f"✅ 已从 archive/{kind}/ 恢复: {topic}")
+
+    print("ℹ️  需手动添加索引: curve-memory index --rebuild")
+
+
 def cmd_install_wizard(args):
     """交互式安装向导：检查依赖、初始化、配置"""
     import subprocess, json, shutil
@@ -550,6 +692,17 @@ def main():
     # install-wizard
     p_wizard = sub.add_parser("install-wizard", help="安装向导：检查依赖并初始化")
     p_wizard.set_defaults(func=cmd_install_wizard)
+
+    # repair
+    p_repair = sub.add_parser("repair", help="修复：检查并修复常见问题")
+    p_repair.add_argument("--fix", action="store_true", help="自动修复")
+    p_repair.set_defaults(func=cmd_repair)
+
+    # recover
+    p_recover = sub.add_parser("recover", help="从 archive/ 恢复已归档的记忆")
+    p_recover.add_argument("topic", nargs="?", help="主题名称")
+    p_recover.add_argument("--list", action="store_true", help="列出可恢复的主题")
+    p_recover.set_defaults(func=cmd_recover)
 
     args = parser.parse_args()
     if hasattr(args, "func"):
