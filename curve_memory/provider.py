@@ -1,14 +1,14 @@
 """
-CurveMemoryProvider — 完整的 Hermes MemoryProvider 实现
+CurveMemoryProvider — Full Hermes MemoryProvider implementation
 
-生命周期：
-  initialize() → 创建资源，加载配置、嵌入引擎、用户画像
-  prefetch()   → 每轮对话前召回记忆 + 用户画像
-  sync_turn()  → 每轮对话后更新活性
-  get_tool_schemas() / handle_tool_call() → 搜索 + 用户画像工具
-  get_config_schema() / save_config() → hermes memory setup 支持
-  on_session_end() → 惰性归档
-  shutdown()   → 清理
+Lifecycle:
+  initialize() → Create resources, load config, embedding engine, user profile
+  prefetch()   → Recall memories + user profile before each turn
+  sync_turn()  → Update activity after each turn
+  get_tool_schemas() / handle_tool_call() → Search + user profile tools
+  get_config_schema() / save_config() → hermes memory setup support
+  on_session_end() → Lazy archive sweep
+  shutdown()   → Cleanup
 """
 
 from __future__ import annotations
@@ -161,7 +161,7 @@ TOOL_SCHEMAS = [
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _touch_memory(topic: str, memories_dir: Path):
-    """更新记忆的访问时间为当前 ISO 8601 时间戳"""
+    """Update the memory's access time to the current ISO 8601 timestamp"""
     try:
         activity_path = memories_dir / "ACTIVITY.yaml"
         if not activity_path.exists():
@@ -179,7 +179,7 @@ def _touch_memory(topic: str, memories_dir: Path):
 
 
 def _extract_mentioned_topics(text: str, memories_dir: Path) -> list:
-    """从文本中提取提到的记忆主题"""
+    """Extract mentioned memory topics from text"""
     topics = set()
     active_dir = memories_dir / "active"
     if not active_dir.exists():
@@ -194,7 +194,7 @@ def _extract_mentioned_topics(text: str, memories_dir: Path) -> list:
 # ── Provider ─────────────────────────────────────────────────────────
 
 class CurveMemoryProvider(MemoryProvider):
-    """遗忘曲线记忆系统 — 基于 R(t) 遗忘曲线的 MemoryProvider"""
+    """Forgetting-curve memory system — MemoryProvider based on R(t) forgetting curve"""
 
     name = "curve-memory"
 
@@ -206,7 +206,7 @@ class CurveMemoryProvider(MemoryProvider):
         self._searcher = None
         self._touched_topics: set = set()
 
-        # 用户画像（USER.md 格式）
+        # User profile (USER.md format)
         self._user_profile: Dict[str, str] = {}
         self._user_profile_path: Optional[Path] = None
 
@@ -220,11 +220,11 @@ class CurveMemoryProvider(MemoryProvider):
     # ── Core lifecycle ──────────────────────────────────────────────
 
     def is_available(self) -> bool:
-        """本地插件始终可用"""
+        """Local plugin is always available"""
         return True
 
     def initialize(self, session_id: str, **kwargs):
-        """初始化嵌入引擎、搜索器、用户画像"""
+        """Initialize embedding engine, searcher, user profile"""
         hermes_home = kwargs.get("hermes_home", str(Path.home() / ".hermes"))
         self._base = Path(hermes_home)
         self._memories_dir = self._base / "memories"
@@ -233,21 +233,21 @@ class CurveMemoryProvider(MemoryProvider):
         from curve_memory.core.note import get_notes_dir
         self._notes_dir = get_notes_dir(self._base)
 
-        # 加载配置
+        # Load config
         self._cfg = load_config(hermes_home)
 
-        # 加载用户画像（USER.md 格式）
+        # Load user profile (USER.md format)
         self._user_profile_path = self._base / "memories" / "USER.md"
         self._load_user_profile()
 
-        # 初始化嵌入器
+        # Initialize embedder
         try:
             self._embedder = create_embedding_provider(self._cfg.get("embedding", {}))
         except Exception as e:
             logger.debug("Embedder init failed: %s", e)
             self._embedder = None
 
-        # 初始化搜索器
+        # Initialize searcher
         try:
             self._searcher = HybridSearch(
                 self._memories_dir,
@@ -260,10 +260,10 @@ class CurveMemoryProvider(MemoryProvider):
             logger.debug("Searcher init failed: %s", e)
             self._searcher = None
 
-        # 迁移旧格式 t 值
+        # Migrate old-format t values
         self._migrate_t_values()
 
-        # 惰性归档
+        # Lazy archive sweep
         self._archive_sweep()
 
         # Run degradation sweep after archive sweep
@@ -274,7 +274,7 @@ class CurveMemoryProvider(MemoryProvider):
         except Exception as e:
             logger.debug("Degradation sweep error: %s", e)
 
-        # 懒加载 index sweep（如果 embedder 可用）
+        # Lazy-load index sweep (if embedder is available)
         if self._embedder:
             try:
                 sweep_result = index_sweep(self._memories_dir, self._embedder)
@@ -285,10 +285,10 @@ class CurveMemoryProvider(MemoryProvider):
             except Exception as e:
                 logger.debug("Index sweep error: %s", e)
 
-        # 注册定时 index sweep cron（不会重复注册）
+        # Register periodic index sweep cron (won't re-register)
         self._register_index_cron()
 
-        # 清理旧的 cron 任务
+        # Clean up old cron jobs
         self._cleanup_old_cron()
 
         self._touched_topics = set()
@@ -299,12 +299,12 @@ class CurveMemoryProvider(MemoryProvider):
     # ── User profile (natural language) ────────────────────────────
 
     def _load_user_profile(self):
-        """从磁盘加载用户画像（自然语言 + 工具条目）
+        """Load user profile from disk (natural language + tool entries)
 
-        兼容以下格式：
-        1. 新格式：自然语言 + ## Auto 段（key: value 条目）
-        2. 旧格式：自然语言 + § 分隔 + key: value 行（OpenClaw 时代遗留）
-        3. 纯自然语言：无任何分隔段（回退：从中提取 key: value 模式）
+        Compatible with the following formats:
+        1. New format: natural language + ## Auto section (key: value entries)
+        2. Old format: natural language + § delimiter + key: value lines (OpenClaw legacy)
+        3. Plain natural language: no delimiter section at all (fallback: extract key: value patterns from it)
         """
         self._user_profile = {}  # dict for tool ops
         self._user_profile_raw = ""  # raw natural language section
@@ -316,7 +316,7 @@ class CurveMemoryProvider(MemoryProvider):
             has_section = "§" in text and not has_auto
 
             if has_auto:
-                # 新格式：## Auto 段
+                # New format: ## Auto section
                 parts = text.split("## Auto")
                 self._user_profile_raw = parts[0].strip()
                 if self._user_profile_raw.startswith("# User Profile"):
@@ -324,13 +324,13 @@ class CurveMemoryProvider(MemoryProvider):
                 if len(parts) > 1:
                     self._parse_kv_lines(parts[1])
             elif has_section:
-                # 旧格式：§ 分隔
+                # Old format: § delimiter
                 parts = text.split("§")
                 self._user_profile_raw = parts[0].strip()
                 if len(parts) > 1:
                     self._parse_kv_lines(parts[1])
             else:
-                # 纯自然语言 — 尝试从中提取 key: value 模式
+                # Plain natural language — try to extract key: value patterns from it
                 self._user_profile_raw = text.strip()
                 self._parse_kv_lines(text)
 
@@ -340,12 +340,12 @@ class CurveMemoryProvider(MemoryProvider):
             self._user_profile_raw = ""
 
     def _parse_kv_lines(self, text: str):
-        """从文本中提取 key: value 模式的行"""
+        """Extract key: value pattern lines from text"""
         for line in text.splitlines():
             line = line.strip()
             if not line or line.startswith("#") or ":" not in line:
                 continue
-            # 跳过明显不是 key:value 的行（包含 CJK 标点、空格过多）
+            # Skip lines that clearly aren't key:value (contain CJK punctuation, too many spaces)
             k, _, v = line.partition(":")
             k = k.strip()
             v = v.strip()
@@ -353,16 +353,16 @@ class CurveMemoryProvider(MemoryProvider):
                 self._user_profile[k] = v
 
     def _save_user_profile(self):
-        """持久化用户画像：自然语言 + 工具条目。
+        """Persist user profile: natural language + tool entries.
 
-        兼容处理：
-        - 如果 _user_profile_raw 包含 § 或重复片段，首次写入时自动迁移清理
+        Compatibility handling:
+        - If _user_profile_raw contains § or duplicate fragments, auto-migrate and clean on first write
         """
         if not self._user_profile_path:
             return
         self._user_profile_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 清理：如果 raw 包含 §，只保留前半段（§ 后的内容已迁移到 ## Auto）
+        # Clean: if raw contains §, keep only the first half (content after § is already migrated to ## Auto)
         raw = self._user_profile_raw or "# User Profile"
         if "§" in raw:
             raw = raw.split("§")[0].strip()
@@ -372,7 +372,7 @@ class CurveMemoryProvider(MemoryProvider):
         if self._user_profile:
             lines.append("## Auto")
             lines.append("")
-            lines.append(f"更新于 {time.strftime('%Y-%m-%d %H:%M')}")
+            lines.append(f"Updated at {time.strftime('%Y-%m-%d %H:%M')}")
             lines.append("")
             for k, v in sorted(self._user_profile.items()):
                 lines.append(f"{k}: {v}")
@@ -381,12 +381,12 @@ class CurveMemoryProvider(MemoryProvider):
     # ── Index sweep cron registration ────────────────────────────
 
     def _ensure_index_script(self) -> Path:
-        """写 index sweep 独立脚本到 ~/.hermes/scripts/，返回路径"""
+        """Write index sweep standalone script to ~/.hermes/scripts/, return path"""
         scripts_dir = self._base / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
         script_path = scripts_dir / self._index_cron_script_name
 
-        # 只在文件不存在时写入
+        # Only write if the file doesn't already exist
         if script_path.exists():
             return script_path
 
@@ -396,7 +396,7 @@ class CurveMemoryProvider(MemoryProvider):
             import shutil
             shutil.copy2(str(src), str(script_path))
         else:
-            # Fallback: 写内联版本
+            # Fallback: write inline version
             script_path.write_text(f"""#!/usr/bin/env python3
 # Auto-generated by curve-memory plugin
 import sys, os
@@ -423,28 +423,28 @@ if embedder:
         return script_path
 
     def _register_index_cron(self):
-        """注册 index sweep 定时 cron（每日 3:00），仅当尚未注册时"""
+        """Register index sweep cron (daily at 03:00), only if not already registered"""
         try:
             cron_dir = self._base / "cron"
             cron_dir.mkdir(parents=True, exist_ok=True)
             cron_file = cron_dir / "jobs.json"
 
-            # 初始化空 jobs.json（新用户首次使用 cron 时文件不存在）
+            # Initialize empty jobs.json (file may not exist for new users first cron use)
             if cron_file.exists():
                 data = json.loads(cron_file.read_text())
             else:
                 data = {"jobs": [], "updated_at": ""}
             jobs = data.get("jobs", [])
 
-            # 检查是否已有同名 job
+            # Check if job with the same name already exists
             for job in jobs:
                 if job.get("name") == self._index_cron_name:
-                    return  # 已注册，跳过
+                    return  # Already registered, skip
 
-            # 确保独立脚本存在
+            # Ensure standalone script exists
             self._ensure_index_script()
 
-            # 注册 cron job（no_agent 模式，每日 3:00）
+            # Register cron job (no_agent mode, daily at 03:00)
             import uuid
             now = __import__("datetime").datetime.now().isoformat()
             new_job = {
@@ -473,9 +473,9 @@ if embedder:
             logger.debug("Index cron registration failed: %s", e)
 
     def _remove_index_cron(self):
-        """清理 index sweep cron 注册和脚本（shutdown 时调用）"""
+        """Clean up index sweep cron registration and script (called during shutdown)"""
         try:
-            # 1. 从 jobs.json 移除
+            # 1. Remove from jobs.json
             cron_file = self._base / "cron" / "jobs.json"
             if cron_file.exists():
                 data = json.loads(cron_file.read_text())
@@ -490,7 +490,7 @@ if embedder:
                     cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                     logger.debug("Removed index sweep cron from jobs.json")
 
-            # 2. 删除独立脚本
+            # 2. Delete standalone script
             script_path = self._base / "scripts" / self._index_cron_script_name
             if script_path.exists():
                 script_path.unlink()
@@ -502,7 +502,7 @@ if embedder:
     # ── Migration / cleanup ─────────────────────────────────────────
 
     def _migrate_t_values(self):
-        """将旧格式的 t 值（day-counter）迁移为 Unix 时间戳"""
+        """Migrate old-format t values (day-counter) to Unix timestamps"""
         try:
             activity_path = self._memories_dir / "ACTIVITY.yaml"
             if not activity_path.exists():
@@ -513,7 +513,7 @@ if embedder:
             changed = False
             for topic, info in memories.items():
                 raw_t = info.get("t", 0)
-                # 旧格式：小于 1e9 的是 day-counter（如 t=7 表示 7 天前）
+                # Old format: value < 1e9 is a day-counter (e.g. t=7 means 7 days ago)
                 if isinstance(raw_t, (int, float)) and 0 < raw_t < 1000000000:
                     from curve_memory.core.activity import format_timestamp
                     info["t"] = format_timestamp()
@@ -525,7 +525,7 @@ if embedder:
             logger.debug("Migration error: %s", e)
 
     def _cleanup_old_cron(self):
-        """清理旧的 cron 任务和脚本"""
+        """Clean up old cron jobs and scripts"""
         try:
             scripts_dir = self._base / "scripts"
             for name in ["curve-memory-forgetting.py", "curve-memory-indexer.py"]:
@@ -552,7 +552,7 @@ if embedder:
     # ── Archive ─────────────────────────────────────────────────────
 
     def _archive_sweep(self):
-        """惰性归档：扫描所有记忆，归档超过阈值的"""
+        """Lazy archive sweep: scan all memories, archive those exceeding threshold"""
         try:
             activity_path = self._memories_dir / "ACTIVITY.yaml"
             if not activity_path.exists():
@@ -569,7 +569,7 @@ if embedder:
             for topic, info in list(memories.items()):
                 from curve_memory.core.activity import parse_timestamp
                 t_days = (now - parse_timestamp(info.get("t", 0))) / 86400
-                # Condense to TIER_1 before archiving
+                # Condense to TIER_1 (minimum) before archiving
                 degrade_memory(topic, self._memories_dir)
                 if t_days >= archive_days:
                     if info.get("mature", False):
@@ -610,11 +610,11 @@ if embedder:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         knowledge_content = f"""# {topic}
 
-**来源：** curve-memory mature promotion
-**固化时间：** {now_str}
-**访问次数：** {info.get('access_count', 0)}
-**原始存档：** archive/mature/{topic}.md
-**注意：** 此文件由遗忘曲线系统自动生成。
+**Source:** curve-memory mature promotion
+**Solidified at:** {now_str}
+**Access count:** {info.get('access_count', 0)}
+**Original archive:** archive/mature/{topic}.md
+**Note:** This file was auto-generated by the forgetting curve system.
 
 ---
 
@@ -647,7 +647,7 @@ if embedder:
             "separately — use curve_memory_read_note to load them on demand."
         ]
         if self._user_profile_raw:
-            # 截断过长的自然语言节，节省 token
+            # Truncate overly long natural language section to save tokens
             raw = self._user_profile_raw[:500]
             if len(self._user_profile_raw) > 500:
                 raw += "\n... (truncated, full profile in USER.md)"
@@ -657,10 +657,10 @@ if embedder:
     # ── Prefetch ────────────────────────────────────────────────────
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """每轮对话前召回相关记忆 + 用户画像"""
+        """Recall relevant memories + user profile before each turn"""
         parts = []
 
-        # 记忆召回
+        # Recall memories
         if self._searcher and query.strip():
             try:
                 results = self._searcher.search(query, top_k=3)
@@ -673,14 +673,14 @@ if embedder:
                         note_refs = self._searcher.get_note_refs(topic)
                         if note_refs:
                             for ref in note_refs:
-                                block += f"\n_📝 [笔记:{ref}]_"
+                                block += f"\n_📝 [note:{ref}]_"
                         blocks.append(block)
                         self._touched_topics.add(topic)
                     parts.append("## Retrieved Memories\n\n" + "\n\n".join(blocks))
             except Exception as e:
                 logger.debug("prefetch error: %s", e)
 
-        # 用户画像（当查询匹配到画像关键词时注入）
+        # User profile (inject when query matches profile keywords)
         if self._user_profile and query.strip():
             q_lower = query.lower()
             matched = {k: v for k, v in self._user_profile.items()
@@ -694,10 +694,10 @@ if embedder:
     # ── Sync turn ───────────────────────────────────────────────────
 
     def sync_turn(self, user: str, asst: str, *, session_id: str = ""):
-        """每轮对话后更新被引用的记忆活性
+        """Update activity for referenced memories after each turn
 
-        白天只更新时间戳（_touch_memory），不做任何降级操作。
-        TIER 降级和语义提炼全部由凌晨 cron 统一处理。
+        During the day, only update timestamps (_touch_memory), no degradation.
+        TIER degradation and semantic condensation are handled by the daily cron.
         """
         if not self._memories_dir:
             return
@@ -790,14 +790,14 @@ if embedder:
     # ── Session end ─────────────────────────────────────────────────
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
-        """对话结束时的惰性归档"""
+        """Lazy archive sweep at session end"""
         self._archive_sweep()
 
     # ── Shutdown ────────────────────────────────────────────────────
 
     def shutdown(self):
         self._save_user_profile()
-        # 清理 index sweep cron 注册和脚本
+        # Clean up index sweep cron registration and script
         self._remove_index_cron()
         self._searcher = None
         self._embedder = None

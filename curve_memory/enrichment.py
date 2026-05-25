@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-enrichment.py — 记忆降级与丰富基础设施
+enrichment.py — Memory Degradation and Enrichment Infrastructure
 
-提供 TIER 驱动的磁盘物理降级（degrade）和对话上下文追加（enrich）。
+Provides TIER-driven on-disk physical degradation (degrade) and conversation context
+appending (enrich).
 """
 
 import json
@@ -18,7 +19,7 @@ from curve_memory.core.tier import forgetting_curve, r_to_tier_level
 
 logger = logging.getLogger(__name__)
 
-# === TIER 内容大小目标 ===
+# === TIER Content Size Targets ===
 TIER_SIZE_LIMITS = {
     5: 4000,
     4: 2000,
@@ -31,7 +32,7 @@ TIER_SIZE_LIMITS = {
 # ── Internal helpers ────────────────────────────────────────────────
 
 def _read_activity(memories_dir: Path) -> dict:
-    """加载 ACTIVITY.yaml，返回完整 dict"""
+    """Load ACTIVITY.yaml and return the full dict"""
     try:
         return load_activity(memories_dir) or {"metadata": {}, "memories": {}}
     except Exception as e:
@@ -40,7 +41,7 @@ def _read_activity(memories_dir: Path) -> dict:
 
 
 def _write_activity(memories_dir: Path, data: dict):
-    """写入 ACTIVITY.yaml"""
+    """Write ACTIVITY.yaml"""
     try:
         path = memories_dir / "ACTIVITY.yaml"
         path.write_text(format_activity(data), encoding="utf-8")
@@ -49,7 +50,7 @@ def _write_activity(memories_dir: Path, data: dict):
 
 
 def _r_for_topic(topic: str, data: dict, now: float) -> float:
-    """计算某个主题当前的 R(t) 值"""
+    """Compute the current R(t) value for a given topic"""
     info = data.get("memories", {}).get(topic, {})
     from curve_memory.core.activity import parse_timestamp
     t_days = (now - parse_timestamp(info.get("t", 0))) / 86400
@@ -57,27 +58,27 @@ def _r_for_topic(topic: str, data: dict, now: float) -> float:
 
 
 def _target_size(tier_level: int) -> int:
-    """TIER 等级 → 最大字符数"""
+    """TIER level → maximum character count"""
     return TIER_SIZE_LIMITS.get(tier_level, 4000)
 
 
 def _condense_content(content: str, tier_level: int) -> str:
-    """根据 TIER 级别压缩内容"""
+    """Condense content according to TIER level"""
     if not content or not content.strip():
         return ""
 
     lines = content.splitlines()
 
     if tier_level >= 5:
-        # TIER_5: 截断到 4000 字符
+        # TIER_5: truncate to 4000 chars
         return content[:4000]
 
     elif tier_level == 4:
-        # TIER_4: 保留前 2000 字符
+        # TIER_4: keep first 2000 chars
         return content[:2000]
 
     elif tier_level == 3:
-        # TIER_3: 提取前 5 个有意义的行
+        # TIER_3: extract first 5 meaningful lines
         meaningful = []
         for line in lines:
             stripped = line.strip()
@@ -91,31 +92,31 @@ def _condense_content(content: str, tier_level: int) -> str:
         return "\n".join(meaningful)
 
     elif tier_level == 2:
-        # TIER_2: 提取第一个有意义的行（标题/关键点）
+        # TIER_2: extract the first meaningful line (title / key point)
         for line in lines:
             stripped = line.strip()
             if stripped and not stripped.startswith("#") and not stripped.startswith("---"):
-                # 限制到 300 字符
+                # Limit to 300 chars
                 return line[:300]
         # Fallback
         return content[:300]
 
     elif tier_level == 1:
-        # TIER_1: 提取主题名 + 第一句片段
+        # TIER_1: extract topic name + first sentence fragment
         for line in lines:
             stripped = line.strip()
             if stripped and not stripped.startswith("#") and not stripped.startswith("---"):
-                # 取第一句（按句号/换行分割）
+                # Take the first sentence (split by period or newline)
                 sentence = stripped.split("。")[0] if "。" in stripped else stripped.split(".")[0]
                 return stripped[:100]
         return content[:100]
 
-    # 默认: 截断到 4000
+    # Default: truncate to 4000
     return content[:4000]
 
 
 def _touch_memory_local(topic: str, memories_dir: Path):
-    """更新记忆的访问时间（本地版，避免循环导入）"""
+    """Update memory access time (local version, avoids circular imports)"""
     try:
         data = _read_activity(memories_dir)
         memories = data.get("memories", {})
@@ -135,7 +136,7 @@ def _tier_cache_path(memories_dir: Path) -> Path:
 
 
 def _load_tier_cache(memories_dir: Path) -> dict:
-    """加载 .tier_cache.json"""
+    """Load .tier_cache.json"""
     path = _tier_cache_path(memories_dir)
     if path.exists():
         try:
@@ -146,7 +147,7 @@ def _load_tier_cache(memories_dir: Path) -> dict:
 
 
 def _save_tier_cache(memories_dir: Path, data: dict):
-    """写入 .tier_cache.json"""
+    """Write .tier_cache.json"""
     try:
         path = _tier_cache_path(memories_dir)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,17 +161,17 @@ def _save_tier_cache(memories_dir: Path, data: dict):
 
 # ── Public API ──────────────────────────────────────────────────────
 
-# === 记忆文件格式解析 ===
-# 格式:
+# === Memory File Format Parsing ===
+# Format:
 #   ## topic-name
-#   **Summary**: <agent 维护的单行摘要>
+#   **Summary**: <agent-maintained one-line summary>
 #
 #   **Details**:
-#   <详细信息>
+#   <detailed content>
 #
 #   ## Enriched (conversation)
-#   <时间戳>
-#   <追加内容>
+#   <timestamp>
+#   <appended content>
 #
 #   note: xxx
 
@@ -179,9 +180,9 @@ DETAILS_HEADER_RE = re.compile(r'^\*\*Details\*\*:', re.MULTILINE)
 
 
 def _parse_memory(content: str) -> dict:
-    """解析记忆文件为结构化 dict
+    """Parse a memory file into a structured dict
 
-    返回:
+    Returns:
         {
             "topic": str,
             "summary": str or "",
@@ -236,7 +237,7 @@ def _parse_memory(content: str) -> dict:
 
 def _build_memory(topic: str, summary: str = "", details: str = "",
                   enriched: str = "", note_refs: list[str] = None) -> str:
-    """从结构组件重建记忆文件"""
+    """Rebuild a memory file from structural components"""
     # Strip note: lines from enriched content (they'll be appended via note_refs)
     if enriched:
         enriched_lines = [l for l in enriched.split("\n") if not l.strip().startswith("note:")]
@@ -258,7 +259,7 @@ def _build_memory(topic: str, summary: str = "", details: str = "",
     return "\n".join(lines) + "\n"
 
 def get_tier_for_topic(topic: str, memories_dir: Path) -> int:
-    """读取 ACTIVITY.yaml，返回指定主题的数值 TIER 等级"""
+    """Read ACTIVITY.yaml and return the numeric TIER level for the given topic"""
     try:
         data = _read_activity(memories_dir)
         now = time.time()
@@ -270,18 +271,19 @@ def get_tier_for_topic(topic: str, memories_dir: Path) -> int:
 
 
 def content_size_fit(content: str, tier_level: int) -> bool:
-    """检查内容长度是否 <= 目标 TIER 大小（只读检查，不截断）"""
+    """Check if content length is <= the target TIER size (read-only check, no truncation)"""
     target = _target_size(tier_level)
     return len(content) <= target
 
 
 def degrade_memory(topic: str, memories_dir: Path) -> bool:
-    """将单个记忆标记为待语义降级（daytime 行为）
+    """Mark a single memory for semantic degradation (daytime behavior)
 
-    不再截断文件。改为在 ACTIVITY.yaml 中设置 pending_summary: true，
-    由凌晨的 semantic degrade cron 命令统一处理。
+    No longer truncates the file directly. Instead, sets pending_summary: true
+    in ACTIVITY.yaml, to be processed by the early-morning semantic degrade cron
+    command.
 
-    返回值：True = 已标记 pending，False = 无需处理
+    Returns: True = marked as pending, False = no action needed
     """
     try:
         data = _read_activity(memories_dir)
@@ -290,7 +292,7 @@ def degrade_memory(topic: str, memories_dir: Path) -> bool:
             logger.debug("degrade: topic '%s' not in ACTIVITY.yaml", topic)
             return False
 
-        # 如果已标记，跳过
+        # Skip if already marked
         if memories[topic].get("pending_summary", False):
             return False
 
@@ -305,11 +307,11 @@ def degrade_memory(topic: str, memories_dir: Path) -> bool:
 
         content = mem_path.read_text(encoding="utf-8")
 
-        # 如果内容已经在目标大小内，跳过（无需降级）
+        # Skip if content is already within the target size (no degradation needed)
         if content_size_fit(content, tier_level):
             return False
 
-        # 标记为待语义降级（不截断文件）
+        # Mark for semantic degradation (do not truncate the file)
         memories[topic]["pending_summary"] = True
         _write_activity(memories_dir, data)
         logger.debug("flagged '%s' for semantic degradation (TIER_%d, %d > %d chars)",
@@ -322,7 +324,7 @@ def degrade_memory(topic: str, memories_dir: Path) -> bool:
 
 
 def degradation_sweep(memories_dir: Path) -> list[str]:
-    """扫描所有记忆，将超过 TIER 大小限制的内容降级"""
+    """Scan all memories and degrade content that exceeds TIER size limits"""
     degraded = []
     try:
         data = _read_activity(memories_dir)
@@ -341,10 +343,10 @@ def degradation_sweep(memories_dir: Path) -> list[str]:
 
 
 def detect_tier_drops(memories_dir: Path) -> list[tuple[str, int, int]]:
-    """检测所有记忆的 TIER 向下穿越
+    """Detect TIER downward crossings for all memories
 
-    维护 .tier_cache.json，比较当前 TIER 与缓存的 TIER，
-    返回 (topic, old_tier, new_tier) 列表。
+    Maintains .tier_cache.json, comparing the current TIER with the cached TIER,
+    and returns a list of (topic, old_tier, new_tier) tuples.
     """
     drops = []
     try:
@@ -367,7 +369,7 @@ def detect_tier_drops(memories_dir: Path) -> list[tuple[str, int, int]]:
             if new_tier < old_tier:
                 drops.append((topic, old_tier, new_tier))
 
-        # 更新缓存
+        # Update cache
         cache["tiers"] = current_tiers
         cache["updated_at"] = int(now)
         _save_tier_cache(memories_dir, cache)
@@ -385,15 +387,15 @@ def enrich_memory(
     source: str = "conversation",
     summary: Optional[str] = None,
 ) -> bool:
-    """追加新信息到记忆文件（新格式：**Summary** + **Details**）
+    """Append new information to a memory file (new format: **Summary** + **Details**)
 
-    summary 参数由主 Agent 提供，每次写入时更新。
-    new_content 追加到 **Details** 部分。
+    The summary parameter is provided by the main Agent and updated on each write.
+    new_content is appended to the **Details** section.
 
-    1. 读取 active/{topic}.md（不存在则按新格式创建）
-    2. 更新 **Summary**（如果提供了 summary）
-    3. 去重检查，追加 new_content 到 **Details**
-    4. 写回文件并更新活性
+    1. Read active/{topic}.md (create in new format if it doesn't exist)
+    2. Update **Summary** (if summary is provided)
+    3. Dedup check, append new_content to **Details**
+    4. Write back to file and update activity
     """
     if not new_content or not new_content.strip():
         if summary is None:
@@ -404,7 +406,7 @@ def enrich_memory(
         active_dir.mkdir(parents=True, exist_ok=True)
         mem_path = active_dir / f"{topic}.md"
 
-        # 读取/初始化内容
+        # Read / initialize content
         if mem_path.exists():
             existing = mem_path.read_text(encoding="utf-8")
             parsed = _parse_memory(existing)
@@ -412,16 +414,16 @@ def enrich_memory(
             parsed = {"topic": topic, "summary": "", "details": "",
                       "enriched": "", "note_refs": []}
 
-        # 更新摘要
+        # Update summary
         if summary is not None and summary.strip():
             parsed["summary"] = summary.strip()
 
-        # 追加新内容到 Details
+        # Append new content to Details
         if new_content and new_content.strip():
             new_text = new_content.strip()
             existing_lower = (parsed["details"] + "\n" + parsed["enriched"]).lower()
 
-            # 去重：跳过已是子串或已存在的行
+            # Dedup: skip if it's already a substring or an existing line
             if new_text.lower() in existing_lower:
                 logger.debug("enrich: new_content is a substring of existing, skipping")
             else:
@@ -437,7 +439,7 @@ def enrich_memory(
                         parsed["details"] = "\n".join(new_lines)
                     logger.debug("enriched '%s' from %s (%d new lines)", topic, source, len(new_lines))
 
-        # 重建文件
+        # Rebuild file
         final_content = _build_memory(
             topic=topic,
             summary=parsed["summary"],
@@ -447,7 +449,7 @@ def enrich_memory(
         )
         mem_path.write_text(final_content, encoding="utf-8")
 
-        # 更新活性
+        # Update activity
         _touch_memory_local(topic, memories_dir)
         return True
 
@@ -460,24 +462,24 @@ def enrich_memory(
 
 
 def _needs_reindex(mem_path: Path, index_path: Path) -> bool:
-    """检查是否需要重新计算 embedding 索引"""
+    """Check whether the embedding index needs to be recomputed"""
     if not index_path.exists():
         return True
-    # 如果内容比索引新，需要更新
+    # If content is newer than the index, an update is needed
     md_mtime = mem_path.stat().st_mtime
     idx_mtime = index_path.stat().st_mtime
-    return md_mtime > idx_mtime + 1  # 1秒容差
+    return md_mtime > idx_mtime + 1  # 1-second tolerance
 
 
 def index_sweep(memories_dir: Path, embedder) -> dict:
-    """扫描所有活跃记忆，重建缺失或过期的 embedding 索引。
+    """Scan all active memories and rebuild missing or stale embedding indices.
 
-    返回值：
+    Return value:
         {
-            "indexed": int,     # 重建的主题数
-            "cleaned": int,     # 清理的孤立索引文件数
-            "errors": int,      # 处理失败数
-            "details": [        # 每个主题的处理记录
+            "indexed": int,     # number of topics rebuilt
+            "cleaned": int,     # number of orphan index files cleaned up
+            "errors": int,      # number of processing failures
+            "details": [        # processing record for each topic
                 {"topic": str, "status": "ok"|"skipped"|"error",
                  "chunks": int|None, "message": str|None}
             ]
@@ -497,11 +499,11 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
 
     embedding_dir.mkdir(parents=True, exist_ok=True)
 
-    # 获取活跃主题列表
+    # Retrieve list of active topics
     data = _read_activity(memories_dir)
     active_topics = set(data.get("memories", {}).keys())
 
-    # 1. 对每个活跃主题检查索引
+    # 1. Check the index for each active topic
     for topic in sorted(active_topics):
         mem_path = active_dir / f"{topic}.md"
         if not mem_path.exists():
@@ -520,7 +522,7 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
             })
             continue
 
-        # 读取内容
+        # Read content
         try:
             content = mem_path.read_text(encoding="utf-8")
         except Exception as e:
@@ -538,7 +540,7 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
             })
             continue
 
-        # 分块（按行分组，每块不超过 2000 字符）
+        # Chunk (group by lines, each chunk not exceeding 2000 characters)
         lines = content.splitlines()
         chunks = []
         current_chunk = []
@@ -556,7 +558,7 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
         if not chunks:
             chunks = [content[:2000]]
 
-        # 计算 embedding 并写入
+        # Compute embeddings and write
         try:
             with open(index_path, "w", encoding="utf-8") as f:
                 for seq, chunk_text in enumerate(chunks):
@@ -568,7 +570,7 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
                         "vector": vector,
                     }
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            # 写入成功后才计入
+            # Only count after successful write
             if index_path.stat().st_size > 0:
                 result["indexed"] += 1
                 result["details"].append({
@@ -583,7 +585,7 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
                     "message": "embed produced empty file",
                 })
         except Exception as e:
-            # 清理空文件
+            # Clean up empty files
             if index_path.exists() and index_path.stat().st_size == 0:
                 index_path.unlink(missing_ok=True)
             result["errors"] += 1
@@ -592,7 +594,7 @@ def index_sweep(memories_dir: Path, embedder) -> dict:
                 "message": f"embed failed: {e}",
             })
 
-    # 2. 清理孤立索引文件（主题已不在活跃列表中的）
+    # 2. Clean up orphan index files (topics no longer in the active list)
     if embedding_dir.exists():
         for fpath in embedding_dir.glob("*.jsonl"):
             if fpath.stem not in active_topics:

@@ -102,71 +102,150 @@ t ≥ 30 天 → mv active/*.md → archive/forgotten/
 
 频繁使用的记忆被提升为永久知识文档，而不是被遗忘。这解决了"用进废退"的问题——最有价值的记忆被固化为持久知识。
 
+## 笔记系统（Notes System）
+
+笔记是详细的文档（如完整配置步骤、API 文档），存储在 `~/.hermes/notes/{name}.md`。
+
+**设计原理：** 笔记内容不占用 agent 上下文，只在需要时按需加载。
+
+**工作方式：**
+- 记忆文件中写一行 `note: searxng-setup-details` 做引用
+- agent 搜索时看到 `_📝 [笔记:name]_` 提示
+- 通过 `curve_memory_read_note(name)` 工具按需读取笔记内容
+- CLI: `hermes curve-memory notes-list/show/delete`
+
+## 语义降级（Cron-Driven Semantic Degradation）
+
+传统的记忆降级方式是"机械截断"——TIER 下降时直接截取前 N 行，丢失大量信息。
+
+curve-memory 采用 cron 驱动的语义降级：
+
+### 记忆文件格式
+
+```
+## topic-name
+**Summary**: <主 Agent 维护的单行摘要>
+
+**Details**:
+<详细信息，可被小模型提炼>
+
+## Enriched (conversation)
+note: xxx
+```
+
+### 降级流程
+
+```
+白天（对话中）                    凌晨 3:00（cron）
+────────────────────             ────────────────────
+sync_turn() 只更新时间戳          scan 所有活跃记忆
+不检测 TIER 下降                  从 ISO 8601 计算 R(t) → TIER
+不截断文件                        检查 content > TIER 目标？
+不调 Ollama                         ├─ 有 note 引用 → 保留 Summary + note，丢弃 Details
+                                    └─ 无 note 引用 → qwen2.5:3b 提炼 Details 部分
+                                    Summary 部分**永远不动**
+```
+
+### 关键特性
+
+- **零白天延迟** — 降级计算全部在凌晨 cron 完成
+- **无机械截断** — 不存在"截到第一行"的粗暴做法
+- **Summary 由 Agent 维护** — 每次 `curve_memory_enrich` 时提供，TIER 再低也不丢
+
+### 安装
+
+```bash
+curl -s http://localhost:11434/api/tags  # 确保 Ollama 运行
+ollama pull qwen2.5:3b                    # 文本生成模型（用于语义提炼）
+hermes curve-memory install-cron          # 安装凌晨 3 点 cron
+hermes curve-memory degrade-semantic --dry-run  # 预览待处理主题
+```
+
+## ISO 8601 时间戳
+
+ACTIVITY.yaml 中的时间戳全部使用 ISO 8601 格式（通过 `date -Iseconds` 写入）：
+
+```yaml
+searxng:
+  t: 2026-05-26T01:50:15+08:00   # 人类可读，带时区
+  access_count: 73
+```
+
+- `parse_timestamp()` 兼容 ISO 字符串和旧 Unix 整数
+- R(t) 计算对两种格式透明
+
 ## 架构
 
 ```
 ┌─ Hermes Agent ──────────────────────────────────────┐
 │                                                      │
 │  MemoryProvider: curve-memory                        │
-│    ├─ prefetch(query) → 三路检索 → TIER 注入         │
-│    ├─ sync_turn()    → 自动 touch 提到的主题          │
-│    ├─ get_tool_schemas() → curve_memory_search 工具   │
+│    ├─ prefetch(query) → 三路检索 + 笔记引用检测      │
+│    ├─ sync_turn()    → 只更新时间戳，无降级逻辑       │
+│    ├─ get_tool_schemas() → 5 个工具（含 read_note）   │
 │    └─ get_config_schema() / save_config()            │
 │                                                      │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
-│  核心引擎                                      │
+│  核心引擎                                             │
 │                                                      │
 │  tier.py         R(t) 公式 + TIER 映射                │
 │  search.py       BM25 + Embedding + R(t) 融合          │
-│  activity.py     ACTIVITY.yaml 读写                   │
+│  activity.py     ACTIVITY.yaml 读写 + 时间戳解析       │
 │  embedding.py    ABC EmbeddingProvider + 工厂函数       │
 │  config.py       get_config_schema, 加载/保存配置       │
+│  note.py         笔记系统 CRUD + 引用检测               │
 │                                                      │
-│  agent/provider.py    MemoryProvider 实现              │
-│  core/                R(t), 检索, 活跃度, 嵌入, 配置   │
-│  backends/            Ollama 嵌入客户端                │
-│  enrichment.py        降级, 归档, 丰富, index_sweep    │
+│  provider.py    MemoryProvider 实现                   │
+│  cli.py         CLI 工具（12 个命令）                  │
+│  enrichment.py  降级标记 + 丰富 + index_sweep          │
+│  backends/      Ollama 嵌入 + 文本生成                 │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
 │  Hermes 托管 (~/.hermes/)                              │
 │                                                      │
 │  memories/           记忆 + 画像 + 嵌入 + FTS5         │
-│  cron/jobs.json      索引更新 cron（自动注册）          │
-│  scripts/curve-memory-index-sweep.py  独立 cron 入口   │
+│  cron/jobs.json      索引更新 + 语义降级 cron           │
+│  scripts/            index-sweep + degrade-semantic    │
+│  notes/              笔记系统                           │
 │  curve-memory-config.json   插件配置文件               │
 ```
 
 ## 数据流
 
 ### 写入路径
+
 ```python
-agent 写入 active/<topic>.md
-  → index_sweep()（initialize 时懒加载，或每日 03:00 cron）:
-    → 检查 .jsonl mtime vs .md mtime
-    → 分块（每块 ≤2000 字符）
-    → 通过 Ollama qwen3-embedding:8b 嵌入（/api/embed，60s 超时）
-    → 写入 .embedding_index/<topic>.jsonl
-  → (FTS5 索引：在线更新，sync_turn() 在对话中同步)
+agent 调用 curve_memory_enrich(topic, content, summary=...)
+  → 更新 **Summary**（如果提供了 summary）
+  → 去重后将新内容追加到 **Details**
+  → 写回 active/<topic>.md
+
+agent 调用 write_note() + link_note_to_memory()
+  → 创建 ~/.hermes/notes/<name>.md
+  → 在记忆文件中追加 note: name
 ```
 
 ### 读取路径
+
 ```
 用户消息 → agent
   → CurveMemoryProvider.prefetch(query)
   → 并行：FTS5 BM25 + Embedding 余弦相似度 + R(t) 查表
   → 归一化 + 加权融合
   → 按 TIER 级别取 top-3
+  → 检测 note: 引用 → 在摘要后显示 _📝 [笔记:name]_
   → 注入 system prompt
 ```
 
 ### 惰性归档（initialize/on_session_end 时触发）
+
 ```
 initialize() / on_session_end():
   → 扫描活跃记忆
-  → 从 Unix 时间戳计算 R(t)（无 day-counter）
+  → 从 ISO 8601 时间戳计算 R(t)
   → 检测成熟度（访问次数 ≥ 20 且 t ≤ 3 天）
   → 若 t ≥ archive_threshold_days 则归档
     → 成熟 → 复制到 archive/mature/ + 提升到 knowledge/
@@ -176,26 +255,26 @@ initialize() / on_session_end():
 
 ### 索引更新 cron（每日凌晨 3:00）
 
-```cron
-initialize():
-  → 如果 embedder 可用: 立刻跑一次 index_sweep()（懒加载，即时补全）
-  → 注册每日 cron（no_agent 模式，幂等，已注册则跳过）
-
+```
 每日 03:00（通过 Hermes cron 调度器）:
-  → 脚本: ~/.hermes/scripts/curve-memory-index-sweep.py
+  → script: ~/.hermes/scripts/curve-memory-index-sweep.py
   → 对每个活跃 topic: 检查 .jsonl mtime vs .md mtime
-    → 缺失或过期 → 分块（≤2000 字符）→ 嵌入 → 写入 .jsonl
+    → 缺失或过期 → 分块 → 嵌入 → 写入 .jsonl
   → 清理孤立 .jsonl（topic 已不在 ACTIVITY.yaml 中的）
 ```
 
-| 项目 | 说明 |
-|------|------|
-| 执行时间 | 每日 03:00（可通过 `jobs.json` 调整） |
-| 模式 | `no_agent`（纯脚本，不消耗 LLM token） |
-| 耗时 | ~1 分钟/10 个 topic，增量 ~10s |
-| 脚本位置 | `~/.hermes/scripts/curve-memory-index-sweep.py` |
-| 自动注册 | `initialize()` 中 `_register_index_cron()` — 一次性，幂等 |
-| 清理 | `shutdown()` 中清理过期 job |
+### 语义降级 cron（每日凌晨 3:00）
+
+```
+每日 03:00（通过 Hermes cron 调度器）:
+  → script: ~/.hermes/scripts/curve-memory-degrade-semantic.py
+  → 扫描所有活跃记忆
+  → 从 ISO 8601 时间戳计算 R(t) → TIER 级别
+  → 检查 content 是否超过 TIER 目标大小
+    → 有笔记 → 丢弃 Details，保留 Summary + note:
+    → 无笔记 → 调 qwen2.5:3b 提炼 Details
+  → Summary 始终保留
+```
 
 ## 配置
 
@@ -232,7 +311,7 @@ curve-memory 完全接管两个系统：
 | **记忆系统** | `MEMORY.md` — 平面键值存储 + `idx:` 索引 | `active/*.md` — 每个主题一个文件，遗忘曲线 R(t)，混合检索 |
 | **用户画像** | `USER.md` — 由 Hermes `memory` 工具管理 | `USER.md`（`memories/` 目录下）— 自然语言，通过 `system_prompt_block()` 注入 |
 
-插件提供 4 个工具：`curve_memory_search`（记忆召回）、`curve_memory_user_get/set/delete`（画像管理）。
+插件提供 5 个工具：`curve_memory_search`、`curve_memory_user_get/set/delete`、`curve_memory_read_note`（按需读取笔记）。
 
 ## 从内置记忆迁移
 
@@ -274,6 +353,7 @@ hermes gateway restart
 | **总检索** | **~50ms** | 三路全开 |
 | 全量索引重建 | ~1 分钟/10 个文件 | 取决于 topic 数量 |
 | 增量索引 | ~10s | 仅变更文件 |
+| 语义降级（每主题） | 20-60s | qwen2.5:3b on CPU，凌晨 cron 执行 |
 
 500 条记忆的预估索引尺寸：< 10 MB（嵌入）+ < 5 MB（FTS5）。
 
@@ -284,6 +364,8 @@ hermes gateway restart
 ```bash
 # 安装 Ollama 并拉取嵌入模型
 ollama pull qwen3-embedding:8b
+# 拉取语义降级模型（可选，推荐）
+ollama pull qwen2.5:3b
 ```
 
 ### 插件安装
@@ -307,7 +389,10 @@ hermes curve-memory index --rebuild
 # 6. 重启 gateway
 hermes gateway restart
 
-# 7. 验证
+# 7. 安装语义降级 cron
+hermes curve-memory install-cron
+
+# 8. 验证
 hermes curve-memory check
 hermes curve-memory status
 ```
@@ -320,7 +405,7 @@ hermes curve-memory status
 hermes curve-memory <命令> [参数]
 ```
 
-### 7 个命令
+### 12 个命令
 
 | 命令 | 说明 | 参数 |
 |------|------|------|
@@ -331,6 +416,11 @@ hermes curve-memory <命令> [参数]
 | `activate` | 重新激活 curve-memory | — |
 | `deactivate` | 停用（保留数据） | — |
 | `index` | 构建索引 | `--rebuild` (全量重建) |
+| `notes-list` | 列出所有笔记 | — |
+| `notes-show <name>` | 查看笔记内容 | — |
+| `notes-delete <name>` | 删除笔记 | — |
+| `degrade-semantic` | 凌晨语义降级 | `--dry-run`, `--max-topics N` |
+| `install-cron` | 安装凌晨 3 点 cron | — |
 
 ### 检索
 
@@ -368,6 +458,25 @@ hermes curve-memory index            # 增量更新
 hermes curve-memory index --rebuild  # 全量重建
 ```
 
+### 笔记系统
+
+```bash
+hermes curve-memory notes-list                      # 列出笔记
+hermes curve-memory notes-show searxng-setup-details # 查看笔记
+hermes curve-memory notes-delete searxng-setup-details # 删除笔记
+```
+
+### 语义降级
+
+```bash
+hermes curve-memory degrade-semantic             # 处理所有待降级主题
+hermes curve-memory degrade-semantic --dry-run    # 预览
+hermes curve-memory degrade-semantic --max-topics 1  # 只处理 1 个
+
+# 安装凌晨 cron
+hermes curve-memory install-cron
+```
+
 ## 相关项目
 
 - [ralqlator](https://github.com/sin1111yi/ralqlator) — Rust 命令行计算器，用于实时验证 R(t) 公式（`ralqlator "0.462 + 0.538 * pow(C_E, -t / 2.71)"`）
@@ -382,22 +491,24 @@ hermes curve-memory index --rebuild  # 全量重建
 ├── README-zh.md                 # 本文件（中文文档）
 ├── after-install.md             # 安装后指引
 ├── scripts/
-│   └── curve-memory-index-sweep.py   # cron 独立入口
+│   └── curve-memory-index-sweep.py   # 索引更新 cron 入口
 └── curve_memory/
     ├── __init__.py               # 包标记
     ├── provider.py               # MemoryProvider 实现
-    ├── cli.py                    # CLI 工具（7 个命令）
+    ├── cli.py                    # CLI 工具（12 个命令）
     ├── enrichment.py             # 降级、归档、丰富、index_sweep
     ├── core/
     │   ├── __init__.py
     │   ├── tier.py               # R(t) 引擎 + TIER 映射
     │   ├── search.py             # 三路混合检索
-    │   ├── activity.py           # ACTIVITY.yaml 读写
+    │   ├── activity.py           # ACTIVITY.yaml 读写 + 时间戳解析
     │   ├── embedding.py          # ABC EmbeddingProvider + 工厂
-    │   └── config.py             # 配置 schema、加载/保存
+    │   ├── config.py             # 配置 schema、加载/保存
+    │   └── note.py               # 笔记系统 CRUD + 引用检测
     ├── backends/
     │   ├── __init__.py
-    │   └── ollama.py             # Ollama 嵌入客户端
+    │   ├── ollama.py             # Ollama 嵌入客户端 (/api/embed)
+    │   └── generate.py           # Ollama 文本生成后端 (/api/generate)
     └── skill/
         └── SKILL.md              # Agent 协议文档
 ```
@@ -406,21 +517,23 @@ hermes curve-memory index --rebuild  # 全量重建
 
 ```
 ~/.hermes/memories/
-├── ACTIVITY.yaml              # t（时间戳）, access_count, mature, protected 标志
+├── ACTIVITY.yaml              # t（ISO 8601 时间戳）, access_count, mature, protected 标志
 ├── MEMORY.md                  # idx:topic [t=N] → active/topic.md
-├── active/                    # 活跃记忆文件（*.md）
+├── active/                    # 活跃记忆文件（*.md，**Summary** + **Details** 格式）
 ├── .embedding_index/          # 每个 topic 的 JSONL 向量索引（*.jsonl）
 ├── .fts5/curve_memory_fts5.db # SQLite FTS5 全文索引
 ├── archive/
 │   ├── forgotten/             # 冷存储（可恢复）
 │   └── mature/                # 永久知识快照
 ├── USER.md                    # 用户画像（自然语言 + ## Auto）
-└── .tier_cache.json           # TIER 缓存（用于 detect_tier_drops）
+└── .tier_cache.json           # TIER 缓存
 
 ~/.hermes/
-├── scripts/curve-memory-index-sweep.py   # cron 脚本（自动复制）
-├── cron/jobs.json                        # cron 注册（自动管理）
-└── curve-memory-config.json              # 插件配置文件
+├── scripts/curve-memory-index-sweep.py    # 索引更新 cron
+├── scripts/curve-memory-degrade-semantic.py # 语义降级 cron
+├── cron/jobs.json                         # cron 注册
+├── notes/                                 # 笔记文件（*.md）
+└── curve-memory-config.json               # 插件配置文件
 ```
 
 ## 设计决策
@@ -432,9 +545,11 @@ hermes curve-memory index --rebuild  # 全量重建
 | **Ollama vs sentence-transformers** | 零 Python ML 依赖，独立服务，多模型支持 |
 | **YAML vs SQLite 存储活跃度** | 人类可读，脚本友好，agent 可直接编辑 |
 | **双层归档 vs 单层** | 高频使用的记忆应被提升而非删除 |
-| **基于时间戳的 R(t) vs cron** | 无需 cron，查询时从 Unix 时间戳实时计算 |
+| **ISO 8601 时间戳 vs Unix 整数** | 人类可读，`date -Iseconds` 写入，`parse_timestamp` 兼容旧格式 |
+| **笔记系统 vs 内联内容** | 详细笔记不占上下文，`curve_memory_read_note` 按需读取 |
+| **cron 驱动语义降级 vs 同步截断** | 零白天延迟，qwen2.5:3b 只提炼 Details，Summary 永远不动 |
 | **惰性归档 vs 每日 cron** | 归档在 initialize/end-session 时触发，无需定时脚本 |
-| **cron 驱动索引更新 vs 在线索引** | 嵌入计算每日 03:00 通过 no_agent 脚本运行；新记忆 24h 内自动索引，不阻塞对话 |
+| **cron 驱动索引更新 vs 在线索引** | 嵌入计算每日 03:00 通过 no_agent 脚本运行 |
 | **JSON 配置 vs YAML 配置段** | 独立文件，兼容 get_config_schema() / save_config() |
 | **`memory.provider` vs `memory.plugin`** | 标准 ABC MemoryProvider 接口 |
 
@@ -445,11 +560,11 @@ hermes curve-memory index --rebuild  # 全量重建
 | 方法 | 用途 |
 |------|------|
 | `initialize()` | 创建资源，加载配置，初始化嵌入引擎，执行惰性归档 |
-| `prefetch(query)` | 每轮对话前调用——注入最多 3 条相关记忆 |
-| `sync_turn(user, asst)` | 每轮对话后调用——更新提到主题的活性 |
-| `system_prompt_block()` | 记忆系统的简短描述 |
-| `get_tool_schemas()` | 返回 4 个工具的 OpenAI function-calling 格式定义（见下文） |
-| `handle_tool_call()` | 处理所有 4 个工具调用 |
+| `prefetch(query)` | 每轮对话前调用——注入最多 3 条相关记忆 + 笔记引用提示 |
+| `sync_turn(user, asst)` | 每轮对话后调用——只更新时间戳，不检测 TIER 下降 |
+| `system_prompt_block()` | 记忆系统的简短描述 + 笔记系统使用说明 |
+| `get_tool_schemas()` | 返回 5 个工具的 OpenAI function-calling 格式定义 |
+| `handle_tool_call()` | 处理所有 5 个工具调用（含 curve_memory_read_note） |
 | `get_config_schema()` | 为 `hermes memory setup` 提供配置 schema |
 | `save_config(values, hermes_home)` | 从 schema values 保存配置 |
 | `on_session_end(messages)` | 对话结束时惰性归档 |
@@ -457,7 +572,7 @@ hermes curve-memory index --rebuild  # 全量重建
 
 ## 工具
 
-插件暴露 4 个工具供 agent 调用：
+插件暴露 5 个工具供 agent 调用：
 
 | 工具 | 用途 | 主要参数 |
 |------|------|----------|
@@ -465,6 +580,7 @@ hermes curve-memory index --rebuild  # 全量重建
 | `curve_memory_user_get` | 获取全部用户画像条目 | — |
 | `curve_memory_user_set` | 存储用户信息（跨会话持久化） | `key` (str), `value` (str) |
 | `curve_memory_user_delete` | 删除用户信息 | `key` (str) |
+| `curve_memory_read_note` | 按需读取笔记内容 | `note_name` (str) |
 
 ### 用户画像
 
@@ -483,7 +599,9 @@ hermes curve-memory index --rebuild  # 全量重建
 - [x] Phase 3: Hermes Plugin 封装与 CLI
 - [x] Phase 4: 集成与端到端验证
 - [x] Phase 5: MemoryProvider ABC 重构
-- [ ] Phase 6: 长期调优（α/β/γ 权重、TIER 阈值、成熟度参数）
+- [x] Phase 6: 笔记系统（按需读取的详细笔记）
+- [x] Phase 7: Cron 驱动语义降级（qwen2.5:3b + **Summary**/**Details** 格式）
+- [ ] Phase 8: 长期调优（α/β/γ 权重、TIER 阈值、成熟度参数）
 
 ## 许可
 

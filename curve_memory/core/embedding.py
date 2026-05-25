@@ -1,5 +1,5 @@
 """
-Embedding Provider 抽象基类 + 工厂函数 + 工具函数
+Embedding Provider ABC + factory + utilities
 """
 
 import json
@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 
 class EmbeddingProvider(ABC):
-    """Embedding 向量化抽象"""
+    """Embedding vectorization ABC"""
 
     @abstractmethod
     def embed(self, text: str) -> List[float]:
@@ -31,7 +31,7 @@ class EmbeddingProvider(ABC):
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """余弦相似度"""
+    """Cosine similarity"""
     dot = sum(x * y for x, y in zip(a, b))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(x * x for x in b) ** 0.5
@@ -41,7 +41,7 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
 
 
 def load_embedding_index(embedding_dir: Path) -> Dict[str, List[Dict[str, Any]]]:
-    """从 .embedding_index/ 加载所有 topic 的 embedding 向量"""
+    """Load all topic embedding vectors from .embedding_index/"""
     index = {}
     if not embedding_dir.exists():
         return index
@@ -57,7 +57,7 @@ def load_embedding_index(embedding_dir: Path) -> Dict[str, List[Dict[str, Any]]]
 
 
 def create_embedding_provider(config: dict = None) -> Optional[EmbeddingProvider]:
-    """根据配置创建 Ollama 嵌入后端"""
+    """Create Ollama embedding backend from config"""
     if config is None:
         config = {}
 
@@ -67,7 +67,7 @@ def create_embedding_provider(config: dict = None) -> Optional[EmbeddingProvider
     from curve_memory.backends.ollama import OllamaBackend
     try:
         provider = OllamaBackend(model=model, base_url=base_url)
-        # 快速连通性测试
+        # Quick connectivity test
         test = provider.embed("ping")
         if test and len(test) > 0:
             return provider

@@ -326,7 +326,7 @@ All commands are available as Hermes subcommands:
 hermes curve-memory <command> [args]
 ```
 
-### 11 Commands
+### 12 Commands
 
 | Command | Description | Flags |
 |---------|-------------|-------|

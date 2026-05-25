@@ -25,8 +25,8 @@ TIER32_PROMPT_EN = (
 )
 
 TIER32_PROMPT_CN = (
-    "将以下技术笔记压缩到约300个字符。\n"
-    "只保留安装命令、配置路径和关键参数：\n\n{content}"
+    "Condense these technical notes to about 300 characters.\n"
+    "Keep only setup commands, config paths, and key parameters:\n\n{content}"
 )
 
 # TIER_2→TIER_1: target ~100 chars
@@ -44,9 +44,9 @@ def _detect_has_cjk(text: str) -> bool:
 
 
 class OllamaGenerate:
-    """Ollama LLM 调用封装，专为语义降级设计。
+    """Ollama LLM wrapper for semantic degradation.
 
-    用法:
+    Usage:
         gen = OllamaGenerate(model="qwen2.5:3b", timeout=90)
         result = gen.generate("prompt...")
         # {"text": "...", "duration": 16.3, "truncated": False}

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""
-search.py — 三路混合检索核心
+"""search.py — Three-way hybrid search core
 
-最终排序分 = α · BM25_score + β · cosine_sim + γ · R(t)
-默认权重: α=0.35, β=0.45, γ=0.20
+Final score = α · BM25_score + β · cosine_sim + γ · R(t)
+Default weights: α=0.35, β=0.45, γ=0.20
 """
 
 import json
@@ -16,12 +15,12 @@ from typing import Dict, List, Optional, Tuple
 from curve_memory.core.tier import forgetting_curve, r_to_tier_name, r_to_tier_level
 from curve_memory.core.activity import parse_activity
 
-# === 默认权重 ===
+# === Default weights ===
 ALPHA = 0.35  # BM25
 BETA = 0.45   # Embedding cosine
 GAMMA = 0.20  # R(t)
 
-# === 降级级别定义 ===
+# === Degradation level definitions ===
 DEGRADE_LEVELS = {
     0: "Full: BM25 + Embedding + R(t)",
     1: "BM25 + R(t) (no embedding)",
@@ -32,7 +31,7 @@ DEGRADE_LEVELS = {
 
 
 class HybridSearch:
-    """三路混合检索器"""
+    """Three-way hybrid searcher"""
 
     def get_note_refs(self, topic: str) -> list[str]:
         """Get note references for a topic by scanning full file content."""
@@ -60,44 +59,44 @@ class HybridSearch:
         self.degrade_level = self._detect_degrade_level()
 
     def _detect_degrade_level(self) -> int:
-        """检测当前降级级别（0-4）"""
+        """Detect current degrade level (0-4)"""
         has_fts5 = self.fts5_path.exists()
         has_embedding = self.embedding_dir.exists() and any(self.embedding_dir.iterdir())
         has_embedder = self.embedder is not None
 
         if has_fts5 and has_embedder and has_embedding:
-            return 0  # 三路全开
+            return 0  # All three paths available
         elif has_fts5 and not has_embedder:
-            return 1  # 仅 BM25 + R(t)
+            return 1  # BM25 + R(t) only
         elif has_embedder and has_embedding and not has_fts5:
-            return 2  # 仅 Embedding + R(t)
+            return 2  # Embedding + R(t) only
         elif has_fts5 or has_embedder:
-            return 3  # 仅单路 + R(t)
+            return 3  # Single path + R(t) only
         else:
-            return 4  # 纯 idx 关键词匹配
+            return 4  # Pure idx keyword matching
 
     def search(self, query: str, top_k: int = 5,
                alpha: float = None, beta: float = None, gamma: float = None
                ) -> List[Tuple[str, float, str, float]]:
         """
-        三路混合检索。
+        Three-way hybrid search.
 
-        返回: [(topic, score, snippet, r_value), ...] 按分数降序
+        Returns: [(topic, score, snippet, r_value), ...] sorted by score descending
         """
         if not query.strip():
             return []
 
-        # 获取所有活跃 topic
+        # Get all active topics
         activity = self._load_activity()
         if not activity:
             return []
 
         all_topics = list(activity.keys())
 
-        # 三路并行
+        # Three-way parallel search
         bm25_scores = self._bm25_search(query, all_topics) if self.degrade_level <= 1 else {}
         cosine_scores = self._semantic_search(query, all_topics) if self.degrade_level in (0, 2) else {}
-        # Level 3/4: 关键词匹配 topic name
+        # Level 3/4: keyword match on topic name
         keyword_scores = {}
         if self.degrade_level >= 3:
             query_lower = query.lower()
@@ -113,10 +112,10 @@ class HybridSearch:
             t_days = (now - parse_timestamp(info.get("t", 0))) / 86400
             r_values[t] = forgetting_curve(t_days)
 
-        # 归一化
+        # Normalize
         bm25_norm = self._normalize_minmax(bm25_scores)
         cos_norm = self._normalize_minmax(cosine_scores)
-        # R(t) 归一化到 [0, 1]
+        # R(t) normalize to [0, 1]
         r_norm = {}
         if r_values:
             max_r = max(r_values.values()) if r_values else 1.0
@@ -124,7 +123,7 @@ class HybridSearch:
             span = max_r - min_r if max_r > min_r else 1.0
             r_norm = {t: (v - min_r) / span for t, v in r_values.items()}
 
-        # 融合
+        # Fuse
         alpha = alpha if alpha is not None else getattr(self, '_alpha', ALPHA)
         beta = beta if beta is not None else getattr(self, '_beta', BETA)
         gamma = gamma if gamma is not None else getattr(self, '_gamma', GAMMA)
@@ -137,14 +136,14 @@ class HybridSearch:
             if score > 0:
                 all_scores[topic] = score
 
-        # 如果没有命中任何检索，用 R(t) 排序保底
+        # If no search hits, fall back to R(t) ordering
         if not all_scores:
             all_scores = {t: r_norm.get(t, 0) for t in all_topics}
 
-        # 排序取 top_k
+        # Sort by score, take top_k
         sorted_topics = sorted(all_scores.items(), key=lambda x: -x[1])[:top_k]
 
-        # 获取 snippet
+        # Get snippet
         result = []
         for topic, score in sorted_topics:
             r_val = r_values.get(topic, 0.462)
@@ -154,7 +153,7 @@ class HybridSearch:
         return result
 
     def _bm25_search(self, query: str, topics: List[str]) -> Dict[str, float]:
-        """FTS5 BM25 检索"""
+        """FTS5 BM25 search"""
         if not self.fts5_path.exists():
             return {}
         try:
@@ -162,7 +161,7 @@ class HybridSearch:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            # 用 FTS5 MATCH
+            # Use FTS5 MATCH
             fts_query = " OR ".join(query.split())
             cursor.execute(
                 "SELECT topic, rank FROM memory_fts WHERE content MATCH ? ORDER BY rank LIMIT 20",
@@ -171,12 +170,12 @@ class HybridSearch:
             rows = cursor.fetchall()
             conn.close()
 
-            # BM25 rank 是负值（越小越相关），转为正分
+            # BM25 rank: negative = more relevant, convert to positive
             scores = {}
             for row in rows:
                 topic = row["topic"]
                 rank = row["rank"]
-                # rank 是负值，越小越相关；转为正分
+                # rank is negative (more relevant = more negative), convert to positive
                 scores[topic] = -rank
 
             return scores
@@ -184,7 +183,7 @@ class HybridSearch:
             return {}
 
     def _semantic_search(self, query: str, topics: List[str]) -> Dict[str, float]:
-        """Embedding 语义检索"""
+        """Embedding semantic search"""
         if not self.embedder or not self.embedding_dir.exists():
             return {}
 
@@ -193,11 +192,11 @@ class HybridSearch:
             if not query_vec:
                 return {}
 
-            # 加载索引
+            # Load index
             from curve_memory.core.embedding import load_embedding_index, cosine_similarity
             index = load_embedding_index(self.embedding_dir)
 
-            # 对每个 topic 取最大 chunk 相似度
+            # For each topic, take max chunk similarity
             scores = {}
             for topic in topics:
                 chunks = index.get(topic, [])
@@ -218,7 +217,7 @@ class HybridSearch:
             return {}
 
     def _load_activity(self) -> dict:
-        """加载 ACTIVITY.yaml"""
+        """Load ACTIVITY.yaml"""
         if not self.activity_path.exists():
             return {}
         raw = self.activity_path.read_text(encoding="utf-8")
@@ -234,7 +233,7 @@ class HybridSearch:
         return {k: (v - min_s) / span for k, v in scores.items()}
 
     def _get_snippet(self, topic: str, r: float) -> str:
-        """根据 TIER 获取内容片段"""
+        """Get snippet based on TIER level"""
         tier_level = r_to_tier_level(r)
         filepath = self.active_dir / f"{topic}.md"
         if not filepath.exists():
@@ -243,14 +242,14 @@ class HybridSearch:
         content = filepath.read_text(encoding="utf-8")
 
         if tier_level >= 4:
-            # 完整内容，取前 500 chars
+            # Full content, take first 500 chars
             return content[:500]
         elif tier_level == 3:
-            # 摘要
+            # Summary
             lines = [l for l in content.split("\n") if l.strip()]
             return "\n".join(lines[:5])[:300]
         elif tier_level == 2:
-            # 首行
+            # First line
             first_line = content.split("\n")[0] if content else ""
             return first_line[:200]
         else:
@@ -262,14 +261,14 @@ class HybridSearch:
 
 
 if __name__ == "__main__":
-    # 测试
+    # Test
     memories_dir = Path.home() / ".hermes" / "memories"
     searcher = HybridSearch(memories_dir)
     print(f"Degrade level: {searcher.degrade_level} — {searcher.degrade_info}")
 
-    # 简单关键词检索
-    results = searcher.search("R(t) 遗忘曲线")
-    print(f"\nSearch results for 'R(t) 遗忘曲线':")
+    # Simple keyword search
+    results = searcher.search("forgetting curve")
+    print(f"\nSearch results for 'forgetting curve':")
     for topic, score, snippet, r in results:
         tier = r_to_tier_name(r)
         print(f"  {topic}: score={score:.4f}, R={r:.4f} ({tier})")

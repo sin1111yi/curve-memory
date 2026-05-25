@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hermes curve-memory — 遗忘曲线记忆系统 CLI
+hermes curve-memory — Forgetting Curve Memory System CLI
 
 7 subcommands: search, status, config, check, activate, deactivate, index
 """
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _get_hermes_home() -> Path:
-    """获取 hermes_home 路径"""
+    """Get hermes_home path"""
     return Path.home() / ".hermes"
 
 
@@ -54,7 +54,7 @@ def _get_searcher(embedder=None):
 # ── Commands ─────────────────────────────────────────────────────────
 
 def cmd_search(args):
-    """三路混合检索"""
+    """Three-way hybrid search"""
     embedder = _get_embedder()
     searcher = _get_searcher(embedder)
     results = searcher.search(args.query, top_k=args.top_k)
@@ -79,16 +79,16 @@ def cmd_search(args):
 
 
 def cmd_status(args):
-    """系统状态查看"""
+    """View system status"""
     memories_dir = _get_memories_dir()
     print("=== Curve Memory Status ===")
     print()
 
-    # 记忆数量
+    # Memory count
     active_files = list((memories_dir / "active").glob("*.md"))
     print(f"📁 Active memories: {len(active_files)}")
 
-    # 归档数量
+    # Archive count
     forgotten = list((memories_dir / "archive" / "forgotten").glob("*.md"))
     mature = list((memories_dir / "archive" / "mature").glob("*.md"))
     print(f"📦 Archived (forgotten): {len(forgotten)}")
@@ -99,7 +99,7 @@ def cmd_status(args):
     knowledge = list(knowledge_dir.glob("*.md")) if knowledge_dir.exists() else []
     print(f"📚 Knowledge docs: {len(knowledge)}")
 
-    # TIER 分布
+    # TIER distribution
     activity_file = memories_dir / "ACTIVITY.yaml"
     if activity_file.exists():
         raw = activity_file.read_text(encoding="utf-8")
@@ -121,7 +121,7 @@ def cmd_status(args):
             bar = "█" * count
             print(f"  {tier:15s}: {count:2d} {bar}")
 
-    # 索引状态
+    # Index status
     embedding_dir = memories_dir / ".embedding_index"
     fts5_path = memories_dir / ".fts5" / "curve_memory_fts5.db"
     print(f"\n🔎 Embedding index: {'✅' if embedding_dir.exists() and any(embedding_dir.iterdir()) else '❌'}")
@@ -136,7 +136,7 @@ def cmd_status(args):
 
 
 def cmd_config(args):
-    """配置查看 / 交互式配置"""
+    """View config / Interactive config"""
     if args.interactive:
         _interactive_config()
         return
@@ -144,14 +144,14 @@ def cmd_config(args):
         cfg = load_config(str(_get_hermes_home()))
         print(format_config(cfg))
     except Exception as e:
-        print(f"加载配置失败: {e}")
+        print(f"Failed to load config: {e}")
 
 
 def _interactive_config():
-    """交互式配置向导 — 写入 JSON 配置文件"""
+    """Interactive config wizard — writes JSON config file"""
     schema = get_config_schema()
-    print("=== Curve Memory 配置向导 ===")
-    print("直接回车使用默认值。\n")
+    print("=== Curve Memory Config Wizard ===")
+    print("Press Enter to use defaults.\n")
     values = {}
     for field in schema:
         key = field["key"]
@@ -160,7 +160,7 @@ def _interactive_config():
         try:
             val = input(f"  {desc} [{default}]: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n已取消")
+            print("\nCancelled")
             return
         if val:
             values[key] = val
@@ -168,13 +168,13 @@ def _interactive_config():
             values[key] = default
     cfg = schema_values_to_config(values)
     save_config(cfg, str(_get_hermes_home()))
-    print("\n✅ 配置已保存到 curve-memory-config.json")
-    print("   查看: hermes curve-memory config")
-    print("   重启: hermes gateway restart")
+    print("\n✅ Config saved to curve-memory-config.json")
+    print("   View: hermes curve-memory config")
+    print("   Restart: hermes gateway restart")
 
 
 def cmd_check(args):
-    """健康检查"""
+    """Health check"""
     memories_dir = _get_memories_dir()
     hermes_home = _get_hermes_home()
     print("=== Curve Memory Health Check ===")
@@ -190,55 +190,55 @@ def cmd_check(args):
         else:
             print("      Format: unknown ❌")
 
-    # 2. 目录结构
+    # 2. Directory structure
     for d in ["active", "archive/forgotten", "archive/mature"]:
         p = memories_dir / d
         print(f"[2/5] memories/{d}: {'✅' if p.exists() else '❌'}")
 
-    # 3. Embedder 连通性
+    # 3. Embedder connectivity
     embedder = _get_embedder()
     if embedder:
         print(f"[3/5] Embedder: ✅ ({embedder.name}, dim={embedder.dim})")
     else:
         print(f"[3/5] Embedder: ❌ (degraded to BM25 + R(t))")
 
-    # 4. 索引完整性
+    # 4. Index integrity
     embedding_dir = memories_dir / ".embedding_index"
     fts5_path = memories_dir / ".fts5" / "curve_memory_fts5.db"
     print(f"[4/5] Embedding index: {'✅' if embedding_dir.exists() and any(embedding_dir.iterdir()) else '❌'}")
     print(f"[4/5] FTS5 index: {'✅' if fts5_path.exists() else '❌'}")
 
-    # 5. 配置
+    # 5. Configuration
     config_path = hermes_home / "curve-memory-config.json"
     print(f"[5/5] Config file: {'✅' if config_path.exists() else '❌ (using defaults)'}")
 
 
 def cmd_activate(args):
-    """激活曲线记忆系统"""
+    """Activate curve memory system"""
     try:
         subprocess.run(["hermes", "config", "set", "memory.provider", "curve-memory"],
                        capture_output=True, timeout=10)
-        print("✅ curve-memory 已启用")
-        print("   重启: hermes gateway restart")
+        print("✅ curve-memory enabled")
+        print("   Restart: hermes gateway restart")
     except Exception as e:
         print(f"⚠️  {e}")
-        print("   手动: hermes config set memory.provider curve-memory")
+        print("   Manual: hermes config set memory.provider curve-memory")
 
 
 def cmd_deactivate(args):
-    """停用曲线记忆系统"""
+    """Deactivate curve memory system"""
     try:
         subprocess.run(["hermes", "config", "unset", "memory.provider"],
                        capture_output=True, timeout=10)
-        print("✅ curve-memory 已停用（数据已保留）")
-        print("   启用: hermes curve-memory activate")
+        print("✅ curve-memory deactivated (data preserved)")
+        print("   Reactivate: hermes curve-memory activate")
     except Exception as e:
         print(f"⚠️  {e}")
-        print("   手动: hermes config unset memory.provider")
+        print("   Manual: hermes config unset memory.provider")
 
 
 def cmd_index(args):
-    """构建索引（增量/全量）"""
+    """Build index (incremental/full)"""
     import sqlite3
     import hashlib
 
@@ -249,7 +249,7 @@ def cmd_index(args):
     fts5_path = fts5_dir / "curve_memory_fts5.db"
     mtime_cache_path = memories_dir / ".mtime_cache.json"
 
-    # 创建目录
+    # Create directories
     fts5_dir.mkdir(parents=True, exist_ok=True)
     embedding_dir.mkdir(parents=True, exist_ok=True)
 
@@ -259,7 +259,7 @@ def cmd_index(args):
 
     now = time.time()
 
-    # 初始化 FTS5
+    # Initialize FTS5
     conn = sqlite3.connect(str(fts5_path))
     conn.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
@@ -268,7 +268,7 @@ def cmd_index(args):
     """)
     conn.commit()
 
-    # 加载 mtime 缓存
+    # Load mtime cache
     mtime_cache = {}
     if mtime_cache_path.exists() and not args.rebuild:
         mtime_cache = json.loads(mtime_cache_path.read_text())
@@ -284,21 +284,21 @@ def cmd_index(args):
 
         current_mtime = str(filepath.stat().st_mtime)
 
-        # 增量模式：跳过未变更的文件
+        # Incremental: skip unchanged files
         if not args.rebuild and mtime_cache.get(topic) == current_mtime:
             skipped += 1
             continue
 
         content = filepath.read_text(encoding="utf-8")
 
-        # 获取 TIER 级别
+        # Get TIER level
         info = memories.get(topic, {})
         from curve_memory.core.activity import parse_timestamp
         t_days = (now - parse_timestamp(info.get("t", 0))) / 86400
         r = forgetting_curve(t_days)
         tier_level = __import__("curve_memory.core.tier", fromlist=["r_to_tier_level"]).r_to_tier_level(r)
 
-        # 按 TIER 级别分块
+        # Chunk by TIER level
         lines = content.splitlines()
         max_chars = {5: 2000, 4: 1000, 3: 500, 2: 300, 1: 100}.get(tier_level, 100)
         chunks = []
@@ -342,7 +342,7 @@ def cmd_index(args):
         mtime_cache[topic] = current_mtime
         changed += 1
 
-    # 清理不存在的 topic 索引
+    # Clean up stale topic indices
     active_set = set(topics)
     for fpath in embedding_dir.glob("*.jsonl"):
         if fpath.stem not in active_set:
@@ -354,7 +354,7 @@ def cmd_index(args):
     conn.commit()
     conn.close()
 
-    # 清理 mtime cache
+    # Clean mtime cache
     stale = [t for t in mtime_cache if t not in active_set]
     for t in stale:
         del mtime_cache[t]
@@ -368,45 +368,45 @@ def cmd_index(args):
 
 
 def cmd_notes_list(args):
-    """列出所有笔记"""
+    """List all notes"""
     from curve_memory.core.note import list_notes
     notes_dir = _get_hermes_home() / "notes"
     notes = list_notes(notes_dir)
     if not notes:
-        print("📝 暂无笔记")
+        print("📝 No notes")
         return
-    print(f"📝 笔记 ({len(notes)}):")
+    print(f"📝 Notes ({len(notes)}):")
     for n in notes:
         print(f"  • {n}")
 
 
 def cmd_notes_show(args):
-    """查看笔记内容"""
+    """View note content"""
     from curve_memory.core.note import read_note
     notes_dir = _get_hermes_home() / "notes"
     content = read_note(args.name, notes_dir)
     if content:
         print(content)
     else:
-        print(f"❌ 笔记 '{args.name}' 未找到")
-        print(f"   存放位置: {notes_dir / f'{args.name}.md'}")
+        print(f"❌ Note '{args.name}' not found")
+        print(f"   Location: {notes_dir / f'{args.name}.md'}")
 
 
 def cmd_notes_delete(args):
-    """删除笔记"""
+    """Delete note"""
     from curve_memory.core.note import delete_note
     notes_dir = _get_hermes_home() / "notes"
     if delete_note(args.name, notes_dir):
-        print(f"✅ 笔记 '{args.name}' 已删除")
+        print(f"✅ Note '{args.name}' deleted")
     else:
-        print(f"❌ 笔记 '{args.name}' 未找到")
+        print(f"❌ Note '{args.name}' not found")
 
 
 # ── Semantic degradation ─────────────────────────────────────────────
 
 
 def cmd_degrade_semantic(args):
-    """语义降级：处理所有 pending_summary 主题"""
+    """Semantic degradation: process all pending_summary topics"""
     from curve_memory.backends.generate import OllamaGenerate
     from curve_memory.core.activity import load_activity
     from curve_memory.core.tier import r_to_tier_level
@@ -417,22 +417,22 @@ def cmd_degrade_semantic(args):
     memories_dir = _get_memories_dir()
     notes_dir = hermes_home / "notes"
 
-    # 加载活动数据
+    # Load activity data
     activity = load_activity(memories_dir)
     if not activity:
-        print("❌ 无法加载 ACTIVITY.yaml")
+        print("❌ Failed to load ACTIVITY.yaml")
         return
 
     memories = activity.get("memories", {})
     if not memories:
-        print("✅ 没有活跃记忆")
+        print("✅ No active memories")
         return
 
     now = time.time()
     from curve_memory.core.tier import forgetting_curve, r_to_tier_level
     from curve_memory.enrichment import _target_size, _parse_memory, _build_memory
 
-    # 为每个记忆计算 TIER，检查是否需要降级
+    # Compute TIER for each memory, check if degradation needed
     pending = []
     for topic, info in memories.items():
         from curve_memory.core.activity import parse_timestamp
@@ -447,19 +447,19 @@ def cmd_degrade_semantic(args):
             pending.append((topic, tier, len(content)))
 
     if not pending:
-        print("✅ 所有记忆大小符合 TIER 目标，无需处理")
+        print("✅ All memories within TIER targets, no processing needed")
         return
 
-    print(f"🔍 发现 {len(pending)} 个需要降级的主题")
+    print(f"🔍 Found {len(pending)} topics requiring degradation")
     if args.dry_run:
-        print("\n=== 预览（dry-run）===")
+        print("\n=== Preview (dry-run) ===")
         for topic, tier, size in pending:
             target = _target_size(tier)
             print(f"  📄 {topic}: TIER_{tier}, {size} → {target} chars")
-        print(f"\n  --max-topics N 限制处理数量")
+        print(f"\n  --max-topics N to limit processing count")
         return
 
-    # 实际运行
+    # Execute
     gen = OllamaGenerate(model="qwen2.5:3b", timeout=90)
     processed = 0
     failed = 0
@@ -468,26 +468,26 @@ def cmd_degrade_semantic(args):
     max_topics = args.max_topics if args.max_topics > 0 else len(pending)
     topics_to_process = pending[:max_topics]
 
-    print(f"\n🔄 开始处理 {len(topics_to_process)}/{len(pending)} 个主题...")
+    print(f"\n🔄 Processing {len(topics_to_process)}/{len(pending)} topics...")
     for topic, tier, orig_size in topics_to_process:
         mem_path = memories_dir / "active" / f"{topic}.md"
         if not mem_path.exists():
-            print(f"  ⚠️  {topic}: 文件已被移除，跳过")
+            print(f"  ⚠️  {topic}: file has been removed, skipping")
             skipped += 1
             continue
 
         content = mem_path.read_text(encoding="utf-8")
         target = _target_size(tier)
 
-        # 再次确认大小（文件可能在扫描后被修改）
+        # Double-check size (file may have been modified since scan)
         if len(content) <= target:
-            print(f"  ⏭️  {topic}: 已在目标 {target} 字符内，跳过")
+            print(f"  ⏭️  {topic}: already within {target} char limit, skipping")
             skipped += 1
             continue
 
         print(f"  📄 {topic}: TIER_{tier}, {len(content)} → {target} chars...", end="", flush=True)
 
-        # 解析记忆文件
+        # Parse memory file
         from curve_memory.core.note import extract_note_refs
         from curve_memory.enrichment import _parse_memory, _build_memory
         parsed = _parse_memory(content)
@@ -497,7 +497,7 @@ def cmd_degrade_semantic(args):
         enriched = parsed["enriched"]
 
         if original_refs:
-            # 有笔记 → 笔记包含全部细节，直接丢弃 Details 部分
+            # Has notes → notes contain full details, discard Details section
             condensed = _build_memory(
                 topic=topic,
                 summary=summary,
@@ -506,25 +506,25 @@ def cmd_degrade_semantic(args):
                 note_refs=original_refs,
             )
             mem_path.write_text(condensed, encoding="utf-8")
-            print(f" ✅ {len(condensed)} chars (有笔记，保留摘要+笔记引用)")
+            print(f" ✅ {len(condensed)} chars (has notes, kept summary+note refs)")
             processed += 1
             continue
 
-        # 无笔记 → 仅提炼 **Details** 部分，**Summary** 不动
+        # No notes → only condense **Details** section, keep **Summary** intact
         if not details:
-            # 没有 Details 也没有笔记 → 内容已经是超简形式
-            print(f" ⏭️  无 Details 和笔记，跳过")
+            # No Details and no notes → content is already minimal form
+            print(f" ⏭️  No Details and no notes, skipping")
             skipped += 1
             continue
 
         detail_target = max(100, target - len(summary) - 50)
         if len(details) <= detail_target * 1.2:
-            # Details 没有显著超长，不调模型
-            print(f" ⏭️  Details ({len(details)} chars) 接近目标，跳过")
+            # Details not significantly over target, skip LLM call
+            print(f" ⏭️  Details ({len(details)} chars) near target, skipping")
             skipped += 1
             continue
 
-        # 调 Ollama 提炼 Details
+        # Call Ollama to condense Details
         print(f"details {len(details)}→~{detail_target} chars...", end="", flush=True)
         prompt = f"Keep only the key technical facts from these notes (≤{detail_target} chars):\n\n{details}"
         result = gen.generate(prompt, num_predict=min(detail_target * 2, 400))
@@ -542,17 +542,17 @@ def cmd_degrade_semantic(args):
             note_refs=original_refs,
         )
         mem_path.write_text(condensed, encoding="utf-8")
-        print(f" ✅ {len(condensed)} chars (保留摘要，详情已提炼)")
+        print(f" ✅ {len(condensed)} chars (summary kept, details condensed)")
         processed += 1
 
-    print(f"\n📊 完成: {processed} 已处理, {skipped} 跳过, {failed} 失败")
+    print(f"\n📊 Done: {processed} processed, {skipped} skipped, {failed} failed")
 
 
 # ── Cron setup ────────────────────────────────────────────────────────
 
 
 def cmd_install_cron(args):
-    """安装 cron job（凌晨 3:00 语义降级）"""
+    """Install cron job (3:00 AM semantic degradation)"""
     import subprocess
     cron_line = (
         "0 3 * * * cd ~/.hermes/plugins/curve-memory && "
@@ -572,13 +572,13 @@ def cmd_install_cron(args):
                               capture_output=True, timeout=10)
         if proc.returncode == 0:
             print("✅  Cron job installed: 0 3 * * * degrade-semantic")
-            print("   日志: ~/.hermes/logs/degrade-cron.log")
+            print("   Log: ~/.hermes/logs/degrade-cron.log")
             return
         print(f"⚠️  crontab install failed: {proc.stderr}")
     except FileNotFoundError:
-        print("⚠️  system crontab 不可用，尝试 Hermes cron scheduler...")
+        print("⚠️  system crontab unavailable, trying Hermes cron scheduler...")
     except Exception as e:
-        print(f"⚠️  system crontab 失败: {e}")
+        print(f"⚠️  system crontab failed: {e}")
 
     # Fallback: Hermes cron scheduler via ~/.hermes/cron/jobs.json
     try:
@@ -645,10 +645,10 @@ except Exception as e:
         data["updated_at"] = now
         cron_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"✅  Hermes cron job installed: 0 3 * * * degrade-semantic")
-        print(f"   脚本: {script_path}")
+        print(f"   Script: {script_path}")
     except Exception as e:
-        print(f"❌  安装失败: {e}")
-        print("   请手动添加 crontab 条目:")
+        print(f"❌  Install failed: {e}")
+        print("   Please add crontab entry manually:")
         print(f"   {cron_line}")
 
 
@@ -661,53 +661,53 @@ def register_cli(subparser) -> None:
 
 
 def register_subcommands(sub):
-    """注册所有子命令（7个）"""
-    p_search = sub.add_parser("search", help="三路混合检索")
-    p_search.add_argument("query", help="检索关键词")
-    p_search.add_argument("--top-k", type=int, default=5, help="返回条数")
-    p_search.add_argument("--json", action="store_true", help="JSON 输出")
+    """Register all subcommands (7)"""
+    p_search = sub.add_parser("search", help="Three-way hybrid search")
+    p_search.add_argument("query", help="Search keywords")
+    p_search.add_argument("--top-k", type=int, default=5, help="Number of results")
+    p_search.add_argument("--json", action="store_true", help="JSON output")
     p_search.set_defaults(func=cmd_search)
 
-    p_status = sub.add_parser("status", help="系统状态查看")
+    p_status = sub.add_parser("status", help="View system status")
     p_status.set_defaults(func=cmd_status)
 
-    p_config = sub.add_parser("config", help="查看当前配置或交互式配置")
-    p_config.add_argument("-i", "--interactive", action="store_true", help="交互式配置向导")
+    p_config = sub.add_parser("config", help="View current config or interactive config")
+    p_config.add_argument("-i", "--interactive", action="store_true", help="Interactive config wizard")
     p_config.set_defaults(func=cmd_config)
 
-    p_check = sub.add_parser("check", help="健康检查")
+    p_check = sub.add_parser("check", help="Health check")
     p_check.set_defaults(func=cmd_check)
 
-    p_activate = sub.add_parser("activate", help="重新激活曲线记忆系统")
+    p_activate = sub.add_parser("activate", help="Reactivate the curve memory system")
     p_activate.set_defaults(func=cmd_activate)
 
-    p_deactivate = sub.add_parser("deactivate", help="停用曲线记忆系统（保留数据）")
+    p_deactivate = sub.add_parser("deactivate", help="Deactivate curve memory system (preserve data)")
     p_deactivate.set_defaults(func=cmd_deactivate)
 
-    p_index = sub.add_parser("index", help="构建索引（增量/全量）")
-    p_index.add_argument("--rebuild", action="store_true", help="全量重建")
+    p_index = sub.add_parser("index", help="Build index (incremental/full)")
+    p_index.add_argument("--rebuild", action="store_true", help="Full rebuild")
     p_index.set_defaults(func=cmd_index)
 
     # ── Notes subcommands ──────────────────────────────────────────
-    p_notes_list = sub.add_parser("notes-list", help="列出所有笔记")
+    p_notes_list = sub.add_parser("notes-list", help="List all notes")
     p_notes_list.set_defaults(func=cmd_notes_list)
 
-    p_notes_show = sub.add_parser("notes-show", help="查看笔记内容")
-    p_notes_show.add_argument("name", help="笔记名称（不含 .md）")
+    p_notes_show = sub.add_parser("notes-show", help="View note content")
+    p_notes_show.add_argument("name", help="Note name (without .md)")
     p_notes_show.set_defaults(func=cmd_notes_show)
 
-    p_notes_delete = sub.add_parser("notes-delete", help="删除笔记")
-    p_notes_delete.add_argument("name", help="笔记名称（不含 .md）")
+    p_notes_delete = sub.add_parser("notes-delete", help="Delete note")
+    p_notes_delete.add_argument("name", help="Note name (without .md)")
     p_notes_delete.set_defaults(func=cmd_notes_delete)
 
     # ── Semantic Degradation ───────────────────────────────────────
-    p_degrade = sub.add_parser("degrade-semantic", help="语义降级（处理 pending_summary 主题）")
-    p_degrade.add_argument("--dry-run", action="store_true", help="仅预览，不做实际修改")
-    p_degrade.add_argument("--max-topics", type=int, default=0, help="限制处理数量（默认全部）")
+    p_degrade = sub.add_parser("degrade-semantic", help="Semantic degradation (process pending_summary topics)")
+    p_degrade.add_argument("--dry-run", action="store_true", help="Preview only, no modifications")
+    p_degrade.add_argument("--max-topics", type=int, default=0, help="Limit processing count (default: all)")
     p_degrade.set_defaults(func=cmd_degrade_semantic)
 
     # ── Cron setup ─────────────────────────────────────────────────
-    p_cron = sub.add_parser("install-cron", help="安装 cron job（凌晨3点语义降级）")
+    p_cron = sub.add_parser("install-cron", help="Install cron job (3am semantic degradation)")
     p_cron.set_defaults(func=cmd_install_cron)
 
 

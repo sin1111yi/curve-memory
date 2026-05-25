@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 #!/usr/bin/env python3
-"""activity.py — ACTIVITY.yaml 读写工具
+"""activity.py — ACTIVITY.yaml read/write utility
 
-提供 parse_activity / format_activity 供其他模块共用。
-也提供 parse_timestamp / format_timestamp 统一处理时间戳格式。
-"""
+Provides parse_activity / format_activity for other modules.
+Also provides parse_timestamp / format_timestamp for unified timestamp handling."""
 
 import re
 from datetime import datetime, timezone
@@ -13,13 +12,13 @@ from typing import Optional
 
 
 def parse_timestamp(val) -> float:
-    """解析任意格式的时间戳为 Unix 秒数 (float)
+    """Parse timestamp from any format into Unix seconds (float)
 
-    支持格式：
-    - int/float → Unix 秒数（直接返回）
-    - ISO 8601 字符串 → 解析并转为 Unix 秒数
-    - 纯数字字符串 → 转为数字
-    - 其他 → 返回 0.0
+    Supported formats:
+    - int/float → Unix seconds (return as-is)
+    - ISO 8601 string → parse and convert to Unix seconds
+    - Pure numeric string → convert to number
+    - Otherwise → return 0.0
     """
     if isinstance(val, (int, float)):
         return float(val)
@@ -39,9 +38,9 @@ def parse_timestamp(val) -> float:
 
 
 def format_timestamp() -> str:
-    """获取当前时间戳为 ISO 8601 格式字符串
+    """Get current timestamp as ISO 8601 format string
 
-    优先使用 date -Iseconds（人类可读），回退到 Python datetime。
+    Prefer date -Iseconds (human-readable), fallback to Python datetime.
     """
     import subprocess
     try:
@@ -51,7 +50,7 @@ def format_timestamp() -> str:
         )
         if result.returncode == 0:
             ts = result.stdout.strip()
-            # date 输出如 "2026-05-26T10:15:00+08:00"
+            # date output like "2026-05-26T10:15:00+08:00"
             return ts
     except Exception:
         pass
@@ -60,7 +59,7 @@ def format_timestamp() -> str:
 
 
 def parse_activity(text: str) -> dict:
-    """手动解析 ACTIVITY.yaml"""
+    """Manually parse ACTIVITY.yaml"""
     result = {"metadata": {}, "memories": {}}
     current_section = None
     current_memory = None
@@ -70,7 +69,7 @@ def parse_activity(text: str) -> dict:
         if not stripped or stripped.strip().startswith("#"):
             continue
 
-        # 检测顶级键
+        # Detect top-level keys
         m = re.match(r'^(\w+):\s*(.*)', stripped)
         if m:
             key, val = m.group(1), m.group(2).strip()
@@ -81,14 +80,14 @@ def parse_activity(text: str) -> dict:
                 result["metadata"][key] = _parse_val(val)
                 continue
 
-        # 检测 memories 下的 topic 名
+        # Detect topic names under memories
         m = re.match(r'^\s{2}(\S[\w.-]*):', stripped)
         if m and current_section == "memories":
             current_memory = m.group(1)
             result["memories"][current_memory] = {}
             continue
 
-        # 检测记忆字段
+        # Detect memory fields
         if current_memory:
             m = re.match(r'^\s{4}(\w+):\s*(.*)', stripped)
             if m:
@@ -117,7 +116,7 @@ def _parse_val(val: str):
 
 
 def format_activity(data: dict) -> str:
-    """将 dict 格式化为 YAML 字符串"""
+    """Format dict as YAML string"""
     lines = []
     lines.append("metadata:")
     for k, v in data.get("metadata", {}).items():
@@ -141,7 +140,7 @@ def _fmt_val(v):
 
 
 def load_activity(memories_dir: Optional[Path] = None) -> dict:
-    """加载 ACTIVITY.yaml"""
+    """Load ACTIVITY.yaml"""
     if memories_dir is None:
         path = Path.home() / ".hermes" / "memories" / "ACTIVITY.yaml"
     else:

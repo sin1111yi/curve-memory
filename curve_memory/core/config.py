@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""
-config.py — curve-memory 配置管理
+"""config.py — curve-memory configuration management
 
-支持 hermes_home 参数（不硬编码 ~/.hermes），
-环境变量覆盖，提供 get_config_schema / save_config 兼容接口。
-"""
+Supports hermes_home parameter (no hardcoded ~/.hermes),
+env variable override, provides get_config_schema / save_config compatible interfaces."""
 
 import os
 import json
@@ -35,22 +33,22 @@ DEFAULT_CONFIG = {
     },
 }
 
-# 配置段在 config.yaml 中的键名（用于解析和写入）
+# Config section key name in config.yaml (for parsing and writing)
 CONFIG_SECTION_KEY = "curve-memory"
 CONFIG_FILE_NAME = "curve-memory-config.json"
 
 
 def get_config_path(hermes_home: str = "") -> Path:
-    """返回配置文件的路径"""
+    """Return config file path"""
     base = Path(hermes_home).expanduser().resolve() if hermes_home else Path.home() / ".hermes"
     return base / CONFIG_FILE_NAME
 
 
 def load_config(hermes_home: str = "") -> dict:
-    """加载配置，缺失项使用默认值。支持环境变量覆盖。"""
+    """Load config, using defaults for missing keys. Supports env variable override."""
     cfg = _deep_copy(DEFAULT_CONFIG)
 
-    # 尝试从 JSON 配置文件加载
+    # Try loading from JSON config file
     config_path = get_config_path(hermes_home)
     if config_path.exists():
         try:
@@ -66,14 +64,14 @@ def load_config(hermes_home: str = "") -> dict:
 
 
 def save_config(values: dict, hermes_home: str = "") -> None:
-    """保存配置到 JSON 文件"""
+    """Save config to JSON file"""
     config_path = get_config_path(hermes_home)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def get_config_schema() -> list:
-    """返回配置 schema（供 MemoryProvider ABC 使用 / 直接 CLI 调用）"""
+    """Return config schema (for MemoryProvider ABC usage / direct CLI invocation)"""
     return [
         {
             "key": "model",
@@ -109,7 +107,7 @@ def get_config_schema() -> list:
 
 
 def schema_values_to_config(values: dict) -> dict:
-    """将 get_config_schema() 的 values 转为内部配置格式"""
+    """Convert get_config_schema() values to internal config format"""
     return {
         "embedding": {
             "provider": "ollama",
@@ -131,7 +129,7 @@ def schema_values_to_config(values: dict) -> dict:
 
 
 def _apply_env_overrides(cfg: dict) -> dict:
-    """环境变量覆盖配置"""
+    """Apply env variable overrides to config"""
     env_map = {
         "CURVE_MEMORY_EMBEDDING_MODEL": ("embedding", "model"),
         "CURVE_MEMORY_EMBEDDING_URL": ("embedding", "base_url"),
@@ -158,7 +156,7 @@ def _deep_copy(d: dict) -> dict:
 
 
 def format_config(cfg: dict) -> str:
-    """格式化配置为可读字符串"""
+    """Format config as readable string"""
     lines = ["=== Curve Memory Configuration ==="]
     for section, values in cfg.items():
         lines.append(f"\n[{section}]")

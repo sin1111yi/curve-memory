@@ -1,5 +1,5 @@
 """
-Ollama Embedding Backend — 通过 Ollama API 获取向量
+Ollama Embedding Backend — vector embedding via Ollama API
 """
 
 import json
@@ -29,7 +29,7 @@ class OllamaBackend(EmbeddingProvider):
             return json.loads(resp.read().decode())
 
     def embed(self, text: str) -> List[float]:
-        # 使用新版 /api/embed 端点（Ollama 0.24+）
+        # Use newer /api/embed endpoint (Ollama 0.24+)
         result = self._request("embed", {
             "model": self.model,
             "input": text,
