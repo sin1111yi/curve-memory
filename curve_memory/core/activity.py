@@ -1,13 +1,62 @@
 #!/usr/bin/env python3
-"""
-activity.py — ACTIVITY.yaml 读写工具
+#!/usr/bin/env python3
+"""activity.py — ACTIVITY.yaml 读写工具
 
 提供 parse_activity / format_activity 供其他模块共用。
+也提供 parse_timestamp / format_timestamp 统一处理时间戳格式。
 """
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+
+def parse_timestamp(val) -> float:
+    """解析任意格式的时间戳为 Unix 秒数 (float)
+
+    支持格式：
+    - int/float → Unix 秒数（直接返回）
+    - ISO 8601 字符串 → 解析并转为 Unix 秒数
+    - 纯数字字符串 → 转为数字
+    - 其他 → 返回 0.0
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        # Try ISO 8601 first
+        try:
+            dt = datetime.fromisoformat(val)
+            return dt.timestamp()
+        except (ValueError, TypeError):
+            pass
+        # Try numeric string (backward compat with old unix timestamps)
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            pass
+    return 0.0
+
+
+def format_timestamp() -> str:
+    """获取当前时间戳为 ISO 8601 格式字符串
+
+    优先使用 date -Iseconds（人类可读），回退到 Python datetime。
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["date", "-Iseconds"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            ts = result.stdout.strip()
+            # date 输出如 "2026-05-26T10:15:00+08:00"
+            return ts
+    except Exception:
+        pass
+    # Fallback
+    return datetime.now().astimezone().isoformat()
 
 
 def parse_activity(text: str) -> dict:

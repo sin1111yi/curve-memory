@@ -103,7 +103,9 @@ TOOL_SCHEMAS = [
             "Append new information to an existing memory topic. "
             "Use this when conversation reveals new facts about a known topic. "
             "The topic must already exist in active memories. "
-            "New content is appended with a timestamped enriched section."
+            "New content is appended with a timestamped enriched section. "
+            "You should ALWAYS provide a 'summary' parameter — a concise one-line "
+            "summary of the memory topic that will be preserved at any TIER level."
         ),
         "parameters": {
             "type": "object",
@@ -116,8 +118,12 @@ TOOL_SCHEMAS = [
                     "type": "string",
                     "description": "New information to add. Should be concise, factual, in markdown format.",
                 },
+                "summary": {
+                    "type": "string",
+                    "description": "A concise one-line summary of the memory topic. ALWAYS provide this — it's preserved at all TIER levels.",
+                },
             },
-            "required": ["topic", "content"],
+            "required": ["topic", "content", "summary"],
         },
     },
     {
@@ -131,13 +137,31 @@ TOOL_SCHEMAS = [
             "properties": {},
         },
     },
+    {
+        "name": "curve_memory_read_note",
+        "description": (
+            "Load the full content of a detailed note associated with a memory topic. "
+            "Use this when you need detailed information that was condensed into a note reference. "
+            "Notes are NOT loaded by default; you must explicitly fetch them."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "note_name": {
+                    "type": "string",
+                    "description": "The note name (without .md extension), e.g. 'searxng-setup-details'",
+                },
+            },
+            "required": ["note_name"],
+        },
+    },
 ]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _touch_memory(topic: str, memories_dir: Path):
-    """更新记忆的访问时间为当前 Unix 时间戳"""
+    """更新记忆的访问时间为当前 ISO 8601 时间戳"""
     try:
         activity_path = memories_dir / "ACTIVITY.yaml"
         if not activity_path.exists():
@@ -146,7 +170,8 @@ def _touch_memory(topic: str, memories_dir: Path):
         data = parse_activity(raw)
         memories = data.get("memories", {})
         if topic in memories:
-            memories[topic]["t"] = int(time.time())
+            from curve_memory.core.activity import format_timestamp
+            memories[topic]["t"] = format_timestamp()
             memories[topic]["access_count"] = memories[topic].get("access_count", 0) + 1
             activity_path.write_text(format_activity(data), encoding="utf-8")
     except Exception as e:
@@ -189,6 +214,9 @@ class CurveMemoryProvider(MemoryProvider):
         self._index_cron_name = "curve-memory-index-sweep"
         self._index_cron_script_name = "curve-memory-index-sweep.py"
 
+        # notes system
+        self._notes_dir: Optional[Path] = None
+
     # ── Core lifecycle ──────────────────────────────────────────────
 
     def is_available(self) -> bool:
@@ -200,6 +228,10 @@ class CurveMemoryProvider(MemoryProvider):
         hermes_home = kwargs.get("hermes_home", str(Path.home() / ".hermes"))
         self._base = Path(hermes_home)
         self._memories_dir = self._base / "memories"
+
+        # Initialize notes directory
+        from curve_memory.core.note import get_notes_dir
+        self._notes_dir = get_notes_dir(self._base)
 
         # 加载配置
         self._cfg = load_config(hermes_home)
@@ -479,11 +511,12 @@ if embedder:
             data = parse_activity(raw)
             memories = data.get("memories", {})
             changed = False
-            now = int(time.time())
             for topic, info in memories.items():
                 raw_t = info.get("t", 0)
+                # 旧格式：小于 1e9 的是 day-counter（如 t=7 表示 7 天前）
                 if isinstance(raw_t, (int, float)) and 0 < raw_t < 1000000000:
-                    info["t"] = now - raw_t * 86400
+                    from curve_memory.core.activity import format_timestamp
+                    info["t"] = format_timestamp()
                     changed = True
             if changed:
                 activity_path.write_text(format_activity(data), encoding="utf-8")
@@ -534,11 +567,8 @@ if embedder:
             changed = False
             to_remove = []
             for topic, info in list(memories.items()):
-                raw_t = info.get("t", 0)
-                if isinstance(raw_t, (int, float)) and raw_t > 1000000000:
-                    t_days = (now - raw_t) / 86400
-                else:
-                    t_days = raw_t
+                from curve_memory.core.activity import parse_timestamp
+                t_days = (now - parse_timestamp(info.get("t", 0))) / 86400
                 # Condense to TIER_1 before archiving
                 degrade_memory(topic, self._memories_dir)
                 if t_days >= archive_days:
@@ -612,7 +642,9 @@ if embedder:
         lines = [
             "You have access to a memory system via curve_memory_search tool. "
             "Retrieved memories show a TIER level: TIER_5 (recent, ≤1d), "
-            "TIER_4 (≤3d), TIER_3 (≤7d), TIER_2 (≤14d), ARCHIVE (≥30d)."
+            "TIER_4 (≤3d), TIER_3 (≤7d), TIER_2 (≤14d), ARCHIVE (≥30d). "
+            "Memory files may contain 'note:' references to detailed notes stored "
+            "separately — use curve_memory_read_note to load them on demand."
         ]
         if self._user_profile_raw:
             # 截断过长的自然语言节，节省 token
@@ -636,7 +668,13 @@ if embedder:
                     blocks = []
                     for topic, score, snippet, r in results:
                         tier = r_to_tier_name(r)
-                        blocks.append(f"### {topic} ({tier})\n{snippet}")
+                        block = f"### {topic} ({tier})\n{snippet}"
+                        # Check for note references
+                        note_refs = self._searcher.get_note_refs(topic)
+                        if note_refs:
+                            for ref in note_refs:
+                                block += f"\n_📝 [笔记:{ref}]_"
+                        blocks.append(block)
                         self._touched_topics.add(topic)
                     parts.append("## Retrieved Memories\n\n" + "\n\n".join(blocks))
             except Exception as e:
@@ -656,7 +694,11 @@ if embedder:
     # ── Sync turn ───────────────────────────────────────────────────
 
     def sync_turn(self, user: str, asst: str, *, session_id: str = ""):
-        """每轮对话后更新被引用的记忆活性"""
+        """每轮对话后更新被引用的记忆活性
+
+        白天只更新时间戳（_touch_memory），不做任何降级操作。
+        TIER 降级和语义提炼全部由凌晨 cron 统一处理。
+        """
         if not self._memories_dir:
             return
         mentioned = _extract_mentioned_topics(user, self._memories_dir)
@@ -664,15 +706,6 @@ if embedder:
         for topic in set(mentioned) | self._touched_topics:
             _touch_memory(topic, self._memories_dir)
         self._touched_topics.clear()
-
-        # Check TIER drops for mentioned topics
-        try:
-            drops = detect_tier_drops(self._memories_dir)
-            for topic, old_tier, new_tier in drops:
-                if new_tier < old_tier:
-                    degrade_memory(topic, self._memories_dir)
-        except Exception as e:
-            logger.debug("Tier drop detection error: %s", e)
 
     # ── Tools ───────────────────────────────────────────────────────
 
@@ -728,16 +761,29 @@ if embedder:
         if tool_name == "curve_memory_enrich":
             topic = str(args.get("topic", "")).strip()
             content = str(args.get("content", "")).strip()
+            summary = str(args.get("summary", "")).strip() or None
             if not topic or not content:
                 return json.dumps({"error": "Both 'topic' and 'content' are required"})
             from curve_memory.enrichment import enrich_memory
-            ok = enrich_memory(topic, content, self._memories_dir)
+            ok = enrich_memory(topic, content, self._memories_dir, summary=summary)
             return json.dumps({"status": "ok" if ok else "skipped", "topic": topic})
 
         if tool_name == "curve_memory_degrade_now":
             from curve_memory.enrichment import degradation_sweep
             degraded = degradation_sweep(self._memories_dir)
             return json.dumps({"status": "ok", "degraded": len(degraded), "topics": degraded})
+
+        if tool_name == "curve_memory_read_note":
+            note_name = str(args.get("note_name", "")).strip()
+            if not note_name:
+                return json.dumps({"error": "note_name is required"})
+            from curve_memory.core.note import read_note
+            if not self._notes_dir:
+                return json.dumps({"error": "Notes system not initialized"})
+            content = read_note(note_name, self._notes_dir)
+            if content is None:
+                return json.dumps({"error": f"Note '{note_name}' not found"})
+            return json.dumps({"note_name": note_name, "content": content})
 
         raise NotImplementedError(f"Unknown tool: {tool_name}")
 

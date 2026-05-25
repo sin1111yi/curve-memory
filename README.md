@@ -326,7 +326,7 @@ All commands are available as Hermes subcommands:
 hermes curve-memory <command> [args]
 ```
 
-### 7 Commands
+### 11 Commands
 
 | Command | Description | Flags |
 |---------|-------------|-------|
@@ -337,6 +337,11 @@ hermes curve-memory <command> [args]
 | `activate` | Re-enable curve-memory provider | — |
 | `deactivate` | Disable (preserve data) | — |
 | `index` | Build/rebuild index | `--rebuild` (full rebuild) |
+| `notes-list` | List all available notes | — |
+| `notes-show <name>` | View a note's content | — |
+| `notes-delete <name>` | Delete a note | — |
+| `degrade-semantic` | Nighttime semantic degradation | `--dry-run`, `--max-topics N` |
+| `install-cron` | Install 3 AM cron job for degrade | — |
 
 ### Search
 
@@ -374,6 +379,32 @@ hermes curve-memory index            # Incremental index update
 hermes curve-memory index --rebuild  # Full rebuild from scratch
 ```
 
+### Notes System
+
+```bash
+hermes curve-memory notes-list                      # List all notes
+hermes curve-memory notes-show searxng-setup-details # View note content
+hermes curve-memory notes-delete searxng-setup-details # Delete a note
+```
+
+Notes are stored in `~/.hermes/notes/{name}.md` and referenced from memory files via a `note: name` line. They are NOT loaded into agent context by default — use `curve_memory_read_note` tool to fetch them on demand.
+
+### Semantic Degradation (Cron-Driven)
+
+```bash
+hermes curve-memory degrade-semantic             # Process all pending summaries
+hermes curve-memory degrade-semantic --dry-run    # Preview what would be processed
+hermes curve-memory degrade-semantic --max-topics 1  # Process only 1 topic
+
+# Install nightly cron job (3 AM)
+hermes curve-memory install-cron
+```
+
+The system defers content truncation to a nightly batch job:
+- **Daytime**: `degrade_memory()` only sets `pending_summary: true` in ACTIVITY.yaml — no content lost, no latency
+- **Nighttime (3 AM)**: `degrade-semantic` command calls `qwen2.5:3b` via Ollama to generate semantic summaries, replacing oversized content
+- **Safety**: If Ollama is offline, pending flags persist and retry next night — no data loss
+
 ## Related Projects
 
 - [ralqlator](https://github.com/sin1111yi/ralqlator) — Rust CLI calculator used for real-time R(t) formula verification (`ralqlator "0.462 + 0.538 * pow(C_E, -t / 2.71)"`)
@@ -404,8 +435,10 @@ hermes curve-memory index --rebuild  # Full rebuild from scratch
     ├── backends/
     │   ├── __init__.py
     │   └── ollama.py             # Ollama embedding client (/api/embed)
-    └── skill/
+    └─ skill/
         └── SKILL.md              # Agent protocol document
+    └── curve_memory/core/note.py  # Notes system (CRUD + reference detection) [NEW]
+    └── curve_memory/backends/generate.py  # Ollama generate backend [NEW]
 ```
 
 ## Storage Structure
@@ -426,7 +459,9 @@ hermes curve-memory index --rebuild  # Full rebuild from scratch
 ~/.hermes/
 ├── scripts/curve-memory-index-sweep.py   # Cron script (auto-copied)
 ├── cron/jobs.json                        # Cron registry (auto-managed)
-└── curve-memory-config.json              # Plugin configuration
+├── curve-memory-config.json              # Plugin configuration
+└── notes/                                # Notes system [NEW]
+    └── *.md                              # On-demand notes referenced from memories
 ```
 
 ## Design Decisions
@@ -443,6 +478,8 @@ hermes curve-memory index --rebuild  # Full rebuild from scratch
 | **Cron-driven index sweep over online indexing** | Embedding computation runs daily at 03:00 via no_agent script; new memories indexed within 24h without blocking conversation |
 | **JSON config over YAML section** | Self-contained, compatible with `get_config_schema()` / `save_config()` |
 | **`memory.provider` over `memory.plugin`** | Standard ABC MemoryProvider interface |
+| **Notes as separate files** | Detailed content stored in `~/.hermes/notes/` — not in agent context unless explicitly fetched |
+| **Cron-driven semantic degradation** | Content truncation moved to a nightly 3 AM batch job using qwen2.5:3b for intelligent summarization — zero user-facing latency |
 
 ## MemoryProvider Implementation
 
@@ -471,6 +508,7 @@ The plugin exposes 4 tools the agent can call:
 | `curve_memory_user_get` | Get all stored user profile entries | — |
 | `curve_memory_user_set` | Store a user fact (persists across sessions) | `key` (str), `value` (str) |
 | `curve_memory_user_delete` | Remove a user fact | `key` (str) |
+| `curve_memory_read_note` | Load a detailed note on demand (NOT in context by default) | `note_name` (str) |
 
 ### User Profile
 
@@ -488,7 +526,9 @@ The file has two sections:
 - [x] Phase 3: Hermes Plugin packaging & CLI
 - [x] Phase 4: Integration & end-to-end verification
 - [x] Phase 5: MemoryProvider ABC refactoring
-- [ ] Phase 6: Long-term tuning (α/β/γ weights, TIER thresholds, maturity params)
+- [x] Phase 6: Notes System — detailed notes stored separately, loaded on demand
+- [x] Phase 7: Cron-driven semantic degradation — qwen2.5:3b summarization at 3 AM
+- [ ] Phase 8: Long-term tuning (α/β/γ weights, TIER thresholds, maturity params)
 
 ## License
 

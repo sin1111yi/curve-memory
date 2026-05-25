@@ -6,6 +6,7 @@ enrichment.py — 记忆降级与丰富基础设施
 """
 
 import json
+import re
 import logging
 import time
 from datetime import datetime
@@ -50,11 +51,8 @@ def _write_activity(memories_dir: Path, data: dict):
 def _r_for_topic(topic: str, data: dict, now: float) -> float:
     """计算某个主题当前的 R(t) 值"""
     info = data.get("memories", {}).get(topic, {})
-    raw_t = info.get("t", 0)
-    if isinstance(raw_t, (int, float)) and raw_t > 1000000000:
-        t_days = (now - raw_t) / 86400
-    else:
-        t_days = raw_t
+    from curve_memory.core.activity import parse_timestamp
+    t_days = (now - parse_timestamp(info.get("t", 0))) / 86400
     return forgetting_curve(t_days)
 
 
@@ -122,7 +120,8 @@ def _touch_memory_local(topic: str, memories_dir: Path):
         data = _read_activity(memories_dir)
         memories = data.get("memories", {})
         if topic in memories:
-            memories[topic]["t"] = int(time.time())
+            from curve_memory.core.activity import format_timestamp
+            memories[topic]["t"] = format_timestamp()
             memories[topic]["access_count"] = memories[topic].get("access_count", 0) + 1
             _write_activity(memories_dir, data)
     except Exception as e:
@@ -161,6 +160,103 @@ def _save_tier_cache(memories_dir: Path, data: dict):
 
 # ── Public API ──────────────────────────────────────────────────────
 
+# === 记忆文件格式解析 ===
+# 格式:
+#   ## topic-name
+#   **Summary**: <agent 维护的单行摘要>
+#
+#   **Details**:
+#   <详细信息>
+#
+#   ## Enriched (conversation)
+#   <时间戳>
+#   <追加内容>
+#
+#   note: xxx
+
+SUMMARY_RE = re.compile(r'^\*\*Summary\*\*:\s*(.*)', re.MULTILINE)
+DETAILS_HEADER_RE = re.compile(r'^\*\*Details\*\*:', re.MULTILINE)
+
+
+def _parse_memory(content: str) -> dict:
+    """解析记忆文件为结构化 dict
+
+    返回:
+        {
+            "topic": str,
+            "summary": str or "",
+            "details": str or "",
+            "enriched": str,  # everything from ## Enriched onwards
+            "note_refs": [str],
+        }
+    """
+    result = {
+        "topic": "",
+        "summary": "",
+        "details": "",
+        "enriched": "",
+        "note_refs": [],
+    }
+
+    # Extract topic name from ## heading
+    m = re.search(r'^##\s+(\S+)', content)
+    if m:
+        result["topic"] = m.group(1)
+
+    # Extract summary
+    m = SUMMARY_RE.search(content)
+    if m:
+        result["summary"] = m.group(1).strip()
+
+    # Split into header and enriched sections
+    parts = re.split(r'^##\s+Enriched\b', content, maxsplit=1, flags=re.MULTILINE)
+    header = parts[0]
+    result["enriched"] = ("## Enriched" + parts[1]) if len(parts) > 1 else ""
+
+    # Extract details from header
+    if DETAILS_HEADER_RE.search(header):
+        # Has **Details**: section — extract content after it
+        d_parts = DETAILS_HEADER_RE.split(header, maxsplit=1)
+        result["details"] = d_parts[1].strip() if len(d_parts) > 1 else ""
+        # Summary is before the details header
+        summary_part = d_parts[0]
+        m = SUMMARY_RE.search(summary_part)
+        if m:
+            result["summary"] = m.group(1).strip()
+    else:
+        # No details section — everything after summary is flat content
+        pass
+
+    # Extract note refs from full content
+    from curve_memory.core.note import extract_note_refs
+    result["note_refs"] = extract_note_refs(content)
+
+    return result
+
+
+def _build_memory(topic: str, summary: str = "", details: str = "",
+                  enriched: str = "", note_refs: list[str] = None) -> str:
+    """从结构组件重建记忆文件"""
+    # Strip note: lines from enriched content (they'll be appended via note_refs)
+    if enriched:
+        enriched_lines = [l for l in enriched.split("\n") if not l.strip().startswith("note:")]
+        enriched = "\n".join(enriched_lines)
+
+    lines = [f"## {topic}"]
+    if summary:
+        lines.append(f"**Summary**: {summary}")
+    if details:
+        lines.append("")
+        lines.append("**Details**:")
+        lines.append(details)
+    if enriched:
+        lines.append("")
+        lines.append(enriched)
+    if note_refs:
+        for ref in note_refs:
+            lines.append(f"note: {ref}")
+    return "\n".join(lines) + "\n"
+
 def get_tier_for_topic(topic: str, memories_dir: Path) -> int:
     """读取 ACTIVITY.yaml，返回指定主题的数值 TIER 等级"""
     try:
@@ -174,23 +270,28 @@ def get_tier_for_topic(topic: str, memories_dir: Path) -> int:
 
 
 def content_size_fit(content: str, tier_level: int) -> bool:
-    """检查内容长度是否 <= 目标 TIER 大小"""
+    """检查内容长度是否 <= 目标 TIER 大小（只读检查，不截断）"""
     target = _target_size(tier_level)
     return len(content) <= target
 
 
 def degrade_memory(topic: str, memories_dir: Path) -> bool:
-    """将单个记忆文件降级到当前 TIER 级别应有的内容大小
+    """将单个记忆标记为待语义降级（daytime 行为）
 
-    1. 计算 R(t) 和 tier_level
-    2. 如果内容已在目标大小内 → 返回 False
-    3. 压缩并写回, 返回 True
+    不再截断文件。改为在 ACTIVITY.yaml 中设置 pending_summary: true，
+    由凌晨的 semantic degrade cron 命令统一处理。
+
+    返回值：True = 已标记 pending，False = 无需处理
     """
     try:
         data = _read_activity(memories_dir)
         memories = data.get("memories", {})
         if topic not in memories:
             logger.debug("degrade: topic '%s' not in ACTIVITY.yaml", topic)
+            return False
+
+        # 如果已标记，跳过
+        if memories[topic].get("pending_summary", False):
             return False
 
         now = time.time()
@@ -204,14 +305,15 @@ def degrade_memory(topic: str, memories_dir: Path) -> bool:
 
         content = mem_path.read_text(encoding="utf-8")
 
-        # 如果内容已经在目标大小内，跳过
+        # 如果内容已经在目标大小内，跳过（无需降级）
         if content_size_fit(content, tier_level):
             return False
 
-        # 降级
-        condensed = _condense_content(content, tier_level)
-        mem_path.write_text(condensed, encoding="utf-8")
-        logger.debug("degraded '%s' to TIER_%d (%d chars)", topic, tier_level, len(condensed))
+        # 标记为待语义降级（不截断文件）
+        memories[topic]["pending_summary"] = True
+        _write_activity(memories_dir, data)
+        logger.debug("flagged '%s' for semantic degradation (TIER_%d, %d > %d chars)",
+                     topic, tier_level, len(content), _target_size(tier_level))
         return True
 
     except Exception as e:
@@ -281,16 +383,21 @@ def enrich_memory(
     new_content: str,
     memories_dir: Path,
     source: str = "conversation",
+    summary: Optional[str] = None,
 ) -> bool:
-    """追加新信息到记忆文件
+    """追加新信息到记忆文件（新格式：**Summary** + **Details**）
 
-    1. 读取 active/{topic}.md（不存在则创建）
-    2. 去重检查：模糊子串匹配 + 精确行匹配
-    3. 追加带时间戳的新 section
+    summary 参数由主 Agent 提供，每次写入时更新。
+    new_content 追加到 **Details** 部分。
+
+    1. 读取 active/{topic}.md（不存在则按新格式创建）
+    2. 更新 **Summary**（如果提供了 summary）
+    3. 去重检查，追加 new_content 到 **Details**
     4. 写回文件并更新活性
     """
     if not new_content or not new_content.strip():
-        return False
+        if summary is None:
+            return False
 
     try:
         active_dir = memories_dir / "active"
@@ -300,43 +407,47 @@ def enrich_memory(
         # 读取/初始化内容
         if mem_path.exists():
             existing = mem_path.read_text(encoding="utf-8")
+            parsed = _parse_memory(existing)
         else:
-            existing = f"# {topic}\n\n"
+            parsed = {"topic": topic, "summary": "", "details": "",
+                      "enriched": "", "note_refs": []}
 
-        # 去重检测
-        existing_lower = existing.lower()
-        new_lower = new_content.lower().strip()
+        # 更新摘要
+        if summary is not None and summary.strip():
+            parsed["summary"] = summary.strip()
 
-        # 模糊子串检查
-        if new_lower in existing_lower:
-            logger.debug("enrich: new_content is a substring of existing content, skipping")
-            return False
+        # 追加新内容到 Details
+        if new_content and new_content.strip():
+            new_text = new_content.strip()
+            existing_lower = (parsed["details"] + "\n" + parsed["enriched"]).lower()
 
-        # 精确行匹配：只追加新行
-        existing_lines = set(existing.splitlines())
-        new_lines = []
-        for line in new_content.splitlines():
-            if line.strip() and line.strip() not in existing_lines:
-                new_lines.append(line)
+            # 去重：跳过已是子串或已存在的行
+            if new_text.lower() in existing_lower:
+                logger.debug("enrich: new_content is a substring of existing, skipping")
+            else:
+                existing_lines = set((parsed["details"] + "\n" + parsed["enriched"]).splitlines())
+                new_lines = []
+                for line in new_text.splitlines():
+                    if line.strip() and line.strip() not in existing_lines:
+                        new_lines.append(line)
+                if new_lines:
+                    if parsed["details"]:
+                        parsed["details"] += "\n" + "\n".join(new_lines)
+                    else:
+                        parsed["details"] = "\n".join(new_lines)
+                    logger.debug("enriched '%s' from %s (%d new lines)", topic, source, len(new_lines))
 
-        if not new_lines:
-            logger.debug("enrich: all lines already present, skipping")
-            return False
-
-        # 构建追加内容
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        enriched_section = (
-            f"\n\n## Enriched ({source})\n"
-            f"{now_str}\n"
-            f"{chr(10).join(new_lines)}"
+        # 重建文件
+        final_content = _build_memory(
+            topic=topic,
+            summary=parsed["summary"],
+            details=parsed["details"],
+            enriched=parsed["enriched"],
+            note_refs=parsed["note_refs"],
         )
-
-        # 写回
-        final_content = existing.rstrip("\n") + enriched_section + "\n"
         mem_path.write_text(final_content, encoding="utf-8")
-        logger.debug("enriched '%s' from %s (%d new lines)", topic, source, len(new_lines))
 
-        # 更新活性（相当于 _touch_memory）
+        # 更新活性
         _touch_memory_local(topic, memories_dir)
         return True
 

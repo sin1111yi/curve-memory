@@ -34,6 +34,18 @@ DEGRADE_LEVELS = {
 class HybridSearch:
     """三路混合检索器"""
 
+    def get_note_refs(self, topic: str) -> list[str]:
+        """Get note references for a topic by scanning full file content."""
+        filepath = self.active_dir / f"{topic}.md"
+        if not filepath.exists():
+            return []
+        try:
+            content = filepath.read_text(encoding="utf-8")
+            from curve_memory.core.note import extract_note_refs
+            return extract_note_refs(content)
+        except Exception:
+            return []
+
     def __init__(self, memories_dir: Path, embedder=None,
                  alpha: float = ALPHA, beta: float = BETA, gamma: float = GAMMA):
         self.memories_dir = Path(memories_dir)
@@ -93,16 +105,12 @@ class HybridSearch:
                 if query_lower in topic.lower():
                     keyword_scores[topic] = 1.0
 
-        # Compute R(t) from timestamp if available, otherwise use raw t value
+        # Compute R(t) from timestamp
         now = time.time()
+        from curve_memory.core.activity import parse_timestamp
         r_values = {}
         for t, info in activity.items():
-            raw_t = info.get("t", 0)
-            # If t is a Unix timestamp (>= 1e9, seconds), compute delta in days
-            if isinstance(raw_t, (int, float)) and raw_t > 1000000000:
-                t_days = (now - raw_t) / 86400
-            else:
-                t_days = raw_t
+            t_days = (now - parse_timestamp(info.get("t", 0))) / 86400
             r_values[t] = forgetting_curve(t_days)
 
         # 归一化
