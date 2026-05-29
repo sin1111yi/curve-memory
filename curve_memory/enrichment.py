@@ -277,50 +277,16 @@ def content_size_fit(content: str, tier_level: int) -> bool:
 
 
 def degrade_memory(topic: str, memories_dir: Path) -> bool:
-    """Mark a single memory for semantic degradation (daytime behavior)
+    """Mark a memory for semantic degradation (daytime no-op).
 
-    No longer truncates the file directly. Instead, sets pending_summary: true
-    in ACTIVITY.yaml, to be processed by the early-morning semantic degrade cron
-    command.
+    Daytime degradation is intentionally a no-op — TIER computation
+    and content condensation happen entirely in the nightly
+    `degrade-semantic` cron, which reads ACTIVITY.yaml timestamps
+    directly and processes memories that exceed their TIER target size.
 
-    Returns: True = marked as pending, False = no action needed
+    Returns: always False (no daytime work done).
     """
-    try:
-        data = _read_activity(memories_dir)
-        memories = data.get("memories", {})
-        if topic not in memories:
-            logger.debug("degrade: topic '%s' not in ACTIVITY.yaml", topic)
-            return False
-
-        # Skip if already marked
-        if memories[topic].get("pending_summary", False):
-            return False
-
-        now = time.time()
-        r = _r_for_topic(topic, data, now)
-        tier_level = r_to_tier_level(r)
-
-        mem_path = memories_dir / "active" / f"{topic}.md"
-        if not mem_path.exists():
-            logger.debug("degrade: file not found at %s", mem_path)
-            return False
-
-        content = mem_path.read_text(encoding="utf-8")
-
-        # Skip if content is already within the target size (no degradation needed)
-        if content_size_fit(content, tier_level):
-            return False
-
-        # Mark for semantic degradation (do not truncate the file)
-        memories[topic]["pending_summary"] = True
-        _write_activity(memories_dir, data)
-        logger.debug("flagged '%s' for semantic degradation (TIER_%d, %d > %d chars)",
-                     topic, tier_level, len(content), _target_size(tier_level))
-        return True
-
-    except Exception as e:
-        logger.debug("degrade_memory error for '%s': %s", topic, e)
-        return False
+    return False
 
 
 def degradation_sweep(memories_dir: Path) -> list[str]:

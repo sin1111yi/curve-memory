@@ -406,7 +406,7 @@ def cmd_notes_delete(args):
 
 
 def cmd_degrade_semantic(args):
-    """Semantic degradation: process all pending_summary topics"""
+    """Semantic degradation: condense memories exceeding TIER targets"""
     from curve_memory.backends.generate import OllamaGenerate
     from curve_memory.core.activity import load_activity
     from curve_memory.core.tier import r_to_tier_level
@@ -701,7 +701,7 @@ def register_subcommands(sub):
     p_notes_delete.set_defaults(func=cmd_notes_delete)
 
     # ── Semantic Degradation ───────────────────────────────────────
-    p_degrade = sub.add_parser("degrade-semantic", help="Semantic degradation (process pending_summary topics)")
+    p_degrade = sub.add_parser("degrade-semantic", help="Semantic degradation (condense memories exceeding TIER targets)")
     p_degrade.add_argument("--dry-run", action="store_true", help="Preview only, no modifications")
     p_degrade.add_argument("--max-topics", type=int, default=0, help="Limit processing count (default: all)")
     p_degrade.set_defaults(func=cmd_degrade_semantic)

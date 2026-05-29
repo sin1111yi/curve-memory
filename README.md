@@ -392,7 +392,7 @@ Notes are stored in `~/.hermes/notes/{name}.md` and referenced from memory files
 ### Semantic Degradation (Cron-Driven)
 
 ```bash
-hermes curve-memory degrade-semantic             # Process all pending summaries
+hermes curve-memory degrade-semantic             # Process all memories exceeding TIER targets
 hermes curve-memory degrade-semantic --dry-run    # Preview what would be processed
 hermes curve-memory degrade-semantic --max-topics 1  # Process only 1 topic
 
@@ -401,9 +401,47 @@ hermes curve-memory install-cron
 ```
 
 The system defers content truncation to a nightly batch job:
-- **Daytime**: `degrade_memory()` only sets `pending_summary: true` in ACTIVITY.yaml — no content lost, no latency
-- **Nighttime (3 AM)**: `degrade-semantic` command calls `qwen2.5:3b` via Ollama to generate semantic summaries, replacing oversized content
-- **Safety**: If Ollama is offline, pending flags persist and retry next night — no data loss
+
+```
+Daytime (conversation)                    Nighttime 3 AM (cron)
+────────────────────                      ────────────────────
+sync_turn() → _touch_memory()            curve memory degrade-semantic
+  → update timestamp (ISO 8601)            → scan ALL active memories
+  → NO TIER detection                     → compute R(t) from timestamps
+  → NO file truncation                    → check content vs TIER target
+  → NO Ollama calls                       → if content exceeds target:
+  ~0ms overhead                              ├─ has note? → drop Details, keep Summary + note:
+                                             └─ no note? → qwen2.5:3b condenses Details only
+                                             **Summary** is never touched
+```
+
+**Memory file format:**
+```
+## topic-name
+**Summary**: <agent-maintained one-line summary — preserved at all TIER levels>
+
+**Details**:
+<detailed content, condenses via Ollama when TIER drops>
+
+## Enriched (conversation)
+note: reference-to-external-note
+```
+
+| Condition | Action | Cost |
+|-----------|--------|------|
+| Has `note:` reference | Drop **Details**, keep **Summary** + note ref | ~0ms (no model) |
+| No note, Details too large | Condense **Details** via qwen2.5:3b | 20-60s per topic (nighttime) |
+| Already within TIER target | Skip | ~0ms |
+
+**Safety**: If Ollama is offline during cron, the topic is skipped and retried next night. No data loss — content remains in full until successfully condensed.
+
+**ISO 8601 timestamps**: ACTIVITY.yaml stores human-readable timestamps (via `date -Iseconds`):
+```yaml
+searxng:
+  t: 2026-05-26T01:50:15+08:00
+  access_count: 73
+```
+`parse_timestamp()` handles both ISO strings and legacy Unix integers transparently.
 
 ## Related Projects
 
