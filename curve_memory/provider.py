@@ -266,26 +266,7 @@ class CurveMemoryProvider(MemoryProvider):
         # Lazy archive sweep
         self._archive_sweep()
 
-        # Run degradation sweep after archive sweep
-        try:
-            degraded = degradation_sweep(self._memories_dir)
-            if degraded:
-                logger.debug("Degradation sweep: %d memories condensed", len(degraded))
-        except Exception as e:
-            logger.debug("Degradation sweep error: %s", e)
-
-        # Lazy-load index sweep (if embedder is available)
-        if self._embedder:
-            try:
-                sweep_result = index_sweep(self._memories_dir, self._embedder)
-                indexed = sweep_result.get("indexed", 0)
-                cleaned = sweep_result.get("cleaned", 0)
-                if indexed or cleaned:
-                    logger.debug("Index sweep: %d indexed, %d cleaned", indexed, cleaned)
-            except Exception as e:
-                logger.debug("Index sweep error: %s", e)
-
-        # Register periodic index sweep cron (won't re-register)
+        # Register index sweep cron (idempotent)
         self._register_index_cron()
 
         # Clean up old cron jobs

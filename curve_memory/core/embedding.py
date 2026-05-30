@@ -67,10 +67,7 @@ def create_embedding_provider(config: dict = None) -> Optional[EmbeddingProvider
     from curve_memory.backends.ollama import OllamaBackend
     try:
         provider = OllamaBackend(model=model, base_url=base_url)
-        # Quick connectivity test
-        test = provider.embed("ping")
-        if test and len(test) > 0:
-            return provider
+        return provider
     except Exception:
         pass
     return None
